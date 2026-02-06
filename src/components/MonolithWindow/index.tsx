@@ -1,0 +1,1 @@
+export { MonolithWindow } from './MonolithWindow';

@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background-color: #0a0a0a;
+  color: #e5e5e5;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #505050;
+}
+
+/* Drag region for window */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-track {
+  height: 4px;
+  background: #262626;
+  border-radius: 2px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #9bbc0f;
+  border-radius: 50%;
+  margin-top: -5px;
+  transition: transform 0.1s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+input[type="range"]:focus {
+  outline: none;
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(155, 188, 15, 0.5);
+}
+
+/* Drop zone animation */
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: rgba(155, 188, 15, 0.3);
+  }
+  50% {
+    border-color: rgba(155, 188, 15, 0.8);
+  }
+}
+
+.drop-zone-active {
+  animation: pulse-border 1s ease-in-out infinite;
+}
+
+/* Canvas container */
+.canvas-container {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Floating UI transitions */
+.floating-ui {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.floating-ui-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
+}
+
+.floating-ui-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+/* Button styles */
+.btn-primary {
+  @apply px-4 py-2 bg-gb-light text-gb-darkest font-medium rounded
+         hover:bg-gb-lightest active:bg-gb-dark active:scale-[0.98]
+         transition-all duration-150
+         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gb-light focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-900;
+}
+
+.btn-secondary {
+  @apply px-4 py-2 bg-neutral-800 text-neutral-200 font-medium rounded
+         hover:bg-neutral-700 active:bg-neutral-600 active:scale-[0.98]
+         transition-all duration-150
+         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gb-light focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-900;
+}
