@@ -35,12 +35,9 @@ export function DropZone({ onVideoLoad }: DropZoneProps) {
   }, [onVideoLoad]);
 
   const handleClick = useCallback(async () => {
-    const filePath = await window.electronAPI?.openFile();
-    if (filePath) {
-      // For Electron, use file:// protocol
-      const url = `file://${filePath}`;
-      const name = filePath.split('/').pop() || 'video';
-      onVideoLoad(url, name);
+    const picked = await window.electronAPI?.openVideo?.();
+    if (picked) {
+      onVideoLoad(picked.url, picked.name);
     }
   }, [onVideoLoad]);
 

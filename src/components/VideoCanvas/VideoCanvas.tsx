@@ -21,11 +21,20 @@ import {
   useTrimEnd,
 } from '../../state/store';
 import { RenderPipeline } from '../../webgl/pipeline/RenderPipeline';
-import { DropZone } from './DropZone';
 import { SplitSlider } from './SplitSlider';
 import { GameBoyAudioProcessor } from '../../audio/GameBoyAudioProcessor';
 
-export function VideoCanvas() {
+interface ImportRequest {
+  src: string;
+  name: string;
+  id: number;
+}
+
+interface VideoCanvasProps {
+  importRequest: ImportRequest | null;
+}
+
+export function VideoCanvas({ importRequest }: VideoCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -198,6 +207,27 @@ export function VideoCanvas() {
   useEffect(() => {
     trimEndRef.current = trimEnd;
   }, [trimEnd]);
+
+  // Keep playback state in sync with the real video element state.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const syncPlaybackState = () => {
+      setIsPlaying(!video.paused && !video.ended);
+    };
+
+    video.addEventListener('play', syncPlaybackState);
+    video.addEventListener('pause', syncPlaybackState);
+    video.addEventListener('ended', syncPlaybackState);
+    syncPlaybackState();
+
+    return () => {
+      video.removeEventListener('play', syncPlaybackState);
+      video.removeEventListener('pause', syncPlaybackState);
+      video.removeEventListener('ended', syncPlaybackState);
+    };
+  }, [setIsPlaying]);
 
   // Constrain video playback to trim bounds
   useEffect(() => {
@@ -383,13 +413,18 @@ export function VideoCanvas() {
       });
 
       video.play().catch(console.error);
-      setIsPlaying(true);
     };
 
     video.onerror = () => {
       setIsVideoLoading(false);
     };
-  }, [setVideoInfo, setIsPlaying]);
+  }, [setVideoInfo]);
+
+  // Handle import requests from the main UI.
+  useEffect(() => {
+    if (!importRequest) return;
+    handleVideoLoad(importRequest.src, importRequest.name);
+  }, [importRequest, handleVideoLoad]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -414,18 +449,17 @@ export function VideoCanvas() {
         video.currentTime = trimStartTime;
       }
       video.play().catch(console.error);
-      setIsPlaying(true);
     } else {
       video.pause();
-      setIsPlaying(false);
     }
-  }, [setIsPlaying, videoInfo]);
+  }, [videoInfo]);
 
   // Keyboard shortcut for play/pause
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Only handle spacebar when the canvas container is focused
     if (e.key === ' ' || e.key === 'Spacebar') {
       e.preventDefault();
+      e.stopPropagation();
       togglePlay();
     }
   }, [togglePlay]);
@@ -506,9 +540,6 @@ export function VideoCanvas() {
           </button>
         </div>
       )}
-
-      {/* Drop zone (shown when no video) */}
-      {!videoInfo && !webglError && <DropZone onVideoLoad={handleVideoLoad} />}
 
       {/* Split slider (shown when video loaded) */}
       {videoInfo && !webglError && <SplitSlider containerRef={containerRef} />}

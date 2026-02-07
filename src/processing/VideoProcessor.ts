@@ -18,6 +18,13 @@ export interface FrameData {
   timestamp: number;
 }
 
+export type StreamingFrameHandler = (frame: FrameData) => void | Promise<void>;
+
+type VideoWithRVFC = HTMLVideoElement & {
+  requestVideoFrameCallback: (cb: () => void) => number;
+  cancelVideoFrameCallback: (id: number) => void;
+};
+
 export class VideoProcessor {
   private canvas: OffscreenCanvas;
   private pipeline: RenderPipeline;
@@ -39,15 +46,10 @@ export class VideoProcessor {
   }
 
   setSourceVideoDimensions(width: number, height: number): void {
-    // Update pipeline with source video info (calculates dynamic processing resolution)
     this.pipeline.setSourceVideoInfo(width, height);
-
-    // Get the calculated processing dimensions
     const dims = this.pipeline.getProcessingDimensions();
     this.processWidth = dims.width;
     this.processHeight = dims.height;
-
-    // Resize canvas to match processing dimensions
     this.canvas.width = this.processWidth;
     this.canvas.height = this.processHeight;
   }
@@ -74,6 +76,15 @@ export class VideoProcessor {
     return { width: this.processWidth, height: this.processHeight };
   }
 
+  /**
+   * Calculate the max safe playback rate for frame capture.
+   * At 60Hz display, requestVideoFrameCallback fires ~60 times/sec.
+   * To not miss frames: 60 / playbackRate >= targetFps
+   */
+  private getPlaybackRate(fps: number): number {
+    return Math.max(1, Math.min(Math.floor(60 / fps), 8));
+  }
+
   async extractFrames(
     video: HTMLVideoElement,
     fps: number,
@@ -86,219 +97,414 @@ export class VideoProcessor {
     const trimDuration = actualEndTime - startTime;
     const totalFrames = Math.floor(trimDuration * fps);
 
-    // Validate video has content
     if (duration <= 0 || totalFrames <= 0 || !isFinite(duration)) {
       console.warn('Video has no valid duration, returning empty frames');
       return [];
     }
 
-    console.log(`Extracting ${totalFrames} frames from ${startTime.toFixed(2)}s to ${actualEndTime.toFixed(2)}s`);
+    const rate = this.getPlaybackRate(fps);
+    console.log(`Extracting ${totalFrames} frames at ${rate}x speed from ${startTime.toFixed(2)}s to ${actualEndTime.toFixed(2)}s`);
 
-    // Set source video dimensions to calculate processing resolution
     this.setSourceVideoDimensions(video.videoWidth, video.videoHeight);
 
-    // Use play-based extraction for better performance with long videos
-    return this.extractFramesPlayBased(video, fps, startTime, actualEndTime, totalFrames, onProgress);
+    return this.extractFramesAccelerated(video, fps, startTime, actualEndTime, totalFrames, rate, onProgress);
+  }
+
+  async extractFramesStreaming(
+    video: HTMLVideoElement,
+    fps: number,
+    onFrame: StreamingFrameHandler,
+    onProgress: (progress: number) => void,
+    startTime = 0,
+    endTime?: number
+  ): Promise<number> {
+    const duration = video.duration;
+    const actualEndTime = endTime ?? duration;
+    const trimDuration = actualEndTime - startTime;
+    const totalFrames = Math.floor(trimDuration * fps);
+
+    if (duration <= 0 || totalFrames <= 0 || !isFinite(duration)) {
+      console.warn('Video has no valid duration, returning empty stream');
+      return 0;
+    }
+
+    const rate = this.getPlaybackRate(fps);
+    console.log(`Streaming ${totalFrames} frames at ${rate}x speed from ${startTime.toFixed(2)}s to ${actualEndTime.toFixed(2)}s`);
+
+    this.setSourceVideoDimensions(video.videoWidth, video.videoHeight);
+
+    return this.extractFramesAcceleratedStreaming(
+      video, fps, startTime, actualEndTime, totalFrames, rate, onFrame, onProgress
+    );
   }
 
   /**
-   * Extract frames by playing the video and capturing at intervals.
-   * More reliable for long videos than individual seeks.
+   * Extract frames using accelerated playback with requestVideoFrameCallback.
+   * Plays the video at Nx speed and captures frames as they're presented.
    */
-  private async extractFramesPlayBased(
+  private async extractFramesAccelerated(
     video: HTMLVideoElement,
     fps: number,
     startTime: number,
     endTime: number,
     totalFrames: number,
+    playbackRate: number,
     onProgress: (progress: number) => void
   ): Promise<FrameData[]> {
     video.pause();
+    video.muted = true;
 
-    // Ensure video is ready
     if (video.readyState < 2) {
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Video not ready')), 30000);
-        const onCanPlay = () => {
-          clearTimeout(timeout);
-          video.removeEventListener('canplay', onCanPlay);
-          resolve();
-        };
-        video.addEventListener('canplay', onCanPlay);
-      });
+      await this.waitForReady(video);
     }
 
     // Seek to start position
-    video.currentTime = startTime;
-    await this.waitForSeek(video, startTime, 30000);
+    await this.seekTo(video, startTime);
 
-    // Check if requestVideoFrameCallback is available (more accurate timing)
-    if ('requestVideoFrameCallback' in video) {
-      return this.extractWithVideoFrameCallback(video, fps, startTime, endTime, totalFrames, onProgress);
+    const hasRVFC = 'requestVideoFrameCallback' in video;
+
+    if (hasRVFC) {
+      return this.extractWithRVFC(video, fps, startTime, endTime, totalFrames, playbackRate, onProgress);
     }
 
-    // Fallback: use timeupdate-based extraction
-    return this.extractWithTimeUpdate(video, fps, startTime, endTime, totalFrames, onProgress);
+    return this.extractWithRAF(video, fps, startTime, endTime, totalFrames, playbackRate, onProgress);
   }
 
-  /**
-   * Extract frames using requestVideoFrameCallback (more accurate).
-   */
-  private extractWithVideoFrameCallback(
+  private extractWithRVFC(
     video: HTMLVideoElement,
     fps: number,
     startTime: number,
     endTime: number,
     totalFrames: number,
+    playbackRate: number,
     onProgress: (progress: number) => void
   ): Promise<FrameData[]> {
     return new Promise((resolve, reject) => {
       const frames: FrameData[] = [];
       const frameInterval = 1 / fps;
       let nextCaptureTime = startTime;
-      let lastCapturedTime = -1;
+      const vrvfc = video as VideoWithRVFC;
+
+      const timeout = setTimeout(() => {
+        video.pause();
+        video.playbackRate = 1;
+        if (frames.length > 0) {
+          console.warn(`Timeout, returning ${frames.length} frames`);
+          resolve(frames);
+        } else {
+          reject(new Error('Frame extraction timed out'));
+        }
+      }, 120000);
+
+      const done = () => {
+        clearTimeout(timeout);
+        video.pause();
+        video.playbackRate = 1;
+        console.log(`Extracted ${frames.length} frames via accelerated playback (${playbackRate}x)`);
+        resolve(frames);
+      };
 
       const captureFrame = () => {
         if (frames.length >= totalFrames || video.currentTime >= endTime) {
-          video.pause();
-          console.log(`Extracted ${frames.length} frames using requestVideoFrameCallback`);
-          resolve(frames);
+          done();
           return;
         }
 
-        // Capture frame if we've reached or passed the next capture time
-        if (video.currentTime >= nextCaptureTime && video.currentTime !== lastCapturedTime) {
+        while (video.currentTime >= nextCaptureTime && frames.length < totalFrames) {
           const frame = this.processFrame(video);
           frames.push(frame);
-          lastCapturedTime = video.currentTime;
-          nextCaptureTime = startTime + (frames.length * frameInterval);
+          nextCaptureTime = startTime + frames.length * frameInterval;
           onProgress(frames.length / totalFrames);
         }
 
-        // Request next frame callback
-        (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: () => void) => number })
-          .requestVideoFrameCallback(captureFrame);
+        vrvfc.requestVideoFrameCallback(captureFrame);
       };
 
-      // Set up timeout for safety
-      const timeout = setTimeout(() => {
-        video.pause();
-        if (frames.length > 0) {
-          console.warn(`Timeout during extraction, returning ${frames.length} frames`);
-          resolve(frames);
-        } else {
-          reject(new Error('Frame extraction timed out'));
-        }
-      }, 120000); // 2 minute timeout
-
-      video.addEventListener('ended', () => {
-        clearTimeout(timeout);
-        video.pause();
-        resolve(frames);
-      }, { once: true });
-
+      video.addEventListener('ended', done, { once: true });
       video.addEventListener('error', () => {
         clearTimeout(timeout);
         reject(new Error('Video error during extraction'));
       }, { once: true });
 
-      // Start playback and frame capture
-      (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: () => void) => number })
-        .requestVideoFrameCallback(captureFrame);
+      video.playbackRate = playbackRate;
+      vrvfc.requestVideoFrameCallback(captureFrame);
       video.play().catch(reject);
     });
   }
 
-  /**
-   * Fallback extraction using timeupdate events.
-   */
-  private extractWithTimeUpdate(
+  private extractWithRAF(
     video: HTMLVideoElement,
     fps: number,
     startTime: number,
     endTime: number,
     totalFrames: number,
+    playbackRate: number,
     onProgress: (progress: number) => void
   ): Promise<FrameData[]> {
     return new Promise((resolve, reject) => {
       const frames: FrameData[] = [];
       const frameInterval = 1 / fps;
       let nextCaptureTime = startTime;
+      let rafId = 0;
 
-      const onTimeUpdate = () => {
-        if (frames.length >= totalFrames || video.currentTime >= endTime) {
-          video.pause();
-          video.removeEventListener('timeupdate', onTimeUpdate);
-          console.log(`Extracted ${frames.length} frames using timeupdate`);
-          resolve(frames);
-          return;
-        }
-
-        // Capture frames as we pass each target time
-        while (video.currentTime >= nextCaptureTime && frames.length < totalFrames) {
-          const frame = this.processFrame(video);
-          frames.push(frame);
-          nextCaptureTime = startTime + (frames.length * frameInterval);
-          onProgress(frames.length / totalFrames);
-        }
-      };
-
-      // Set up timeout for safety
       const timeout = setTimeout(() => {
+        cancelAnimationFrame(rafId);
         video.pause();
-        video.removeEventListener('timeupdate', onTimeUpdate);
+        video.playbackRate = 1;
         if (frames.length > 0) {
-          console.warn(`Timeout during extraction, returning ${frames.length} frames`);
           resolve(frames);
         } else {
           reject(new Error('Frame extraction timed out'));
         }
-      }, 120000); // 2 minute timeout
+      }, 120000);
 
-      video.addEventListener('ended', () => {
+      const done = () => {
         clearTimeout(timeout);
+        cancelAnimationFrame(rafId);
         video.pause();
-        video.removeEventListener('timeupdate', onTimeUpdate);
+        video.playbackRate = 1;
+        console.log(`Extracted ${frames.length} frames via RAF fallback (${playbackRate}x)`);
         resolve(frames);
-      }, { once: true });
+      };
 
-      video.addEventListener('error', () => {
-        clearTimeout(timeout);
-        video.removeEventListener('timeupdate', onTimeUpdate);
-        reject(new Error('Video error during extraction'));
-      }, { once: true });
+      const tick = () => {
+        if (frames.length >= totalFrames || video.currentTime >= endTime || video.paused || video.ended) {
+          done();
+          return;
+        }
 
-      video.addEventListener('timeupdate', onTimeUpdate);
+        while (video.currentTime >= nextCaptureTime && frames.length < totalFrames) {
+          frames.push(this.processFrame(video));
+          nextCaptureTime = startTime + frames.length * frameInterval;
+          onProgress(frames.length / totalFrames);
+        }
+
+        rafId = requestAnimationFrame(tick);
+      };
+
+      video.addEventListener('ended', done, { once: true });
+
+      video.playbackRate = playbackRate;
+      rafId = requestAnimationFrame(tick);
       video.play().catch(reject);
     });
   }
 
   /**
-   * Wait for video to seek to target time with timeout, retry logic, and race condition protection.
-   * Adds listener BEFORE setting currentTime to prevent race conditions.
+   * Streaming extraction with accelerated playback.
+   * Captures frames synchronously and queues encoding without pausing the video.
    */
-  private async waitForSeek(
+  private async extractFramesAcceleratedStreaming(
+    video: HTMLVideoElement,
+    fps: number,
+    startTime: number,
+    endTime: number,
+    totalFrames: number,
+    playbackRate: number,
+    onFrame: StreamingFrameHandler,
+    onProgress: (progress: number) => void
+  ): Promise<number> {
+    video.pause();
+    video.muted = true;
+
+    if (video.readyState < 2) {
+      await this.waitForReady(video);
+    }
+
+    await this.seekTo(video, startTime);
+
+    const hasRVFC = 'requestVideoFrameCallback' in video;
+
+    if (hasRVFC) {
+      return this.streamWithRVFC(video, fps, startTime, endTime, totalFrames, playbackRate, onFrame, onProgress);
+    }
+
+    return this.streamWithRAF(video, fps, startTime, endTime, totalFrames, playbackRate, onFrame, onProgress);
+  }
+
+  private streamWithRVFC(
+    video: HTMLVideoElement,
+    fps: number,
+    startTime: number,
+    endTime: number,
+    totalFrames: number,
+    playbackRate: number,
+    onFrame: StreamingFrameHandler,
+    onProgress: (progress: number) => void
+  ): Promise<number> {
+    return new Promise((resolve, reject) => {
+      let framesCaptured = 0;
+      const frameInterval = 1 / fps;
+      let nextCaptureTime = startTime;
+      let settled = false;
+      const pendingEncodes: Promise<void>[] = [];
+      const vrvfc = video as VideoWithRVFC;
+
+      const finalize = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        video.pause();
+        video.playbackRate = 1;
+        // Wait for all queued encodes to finish
+        Promise.all(pendingEncodes)
+          .then(() => {
+            console.log(`Streamed ${framesCaptured} frames via accelerated playback (${playbackRate}x)`);
+            resolve(framesCaptured);
+          })
+          .catch(reject);
+      };
+
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        video.pause();
+        video.playbackRate = 1;
+        reject(error);
+      };
+
+      const timeout = setTimeout(() => {
+        if (framesCaptured > 0) finalize();
+        else fail(new Error('Frame streaming timed out'));
+      }, 120000);
+
+      const captureFrame = () => {
+        if (settled) return;
+
+        if (framesCaptured >= totalFrames || video.currentTime >= endTime) {
+          finalize();
+          return;
+        }
+
+        while (video.currentTime >= nextCaptureTime && framesCaptured < totalFrames) {
+          const frame = this.processFrame(video);
+          const encodePromise = Promise.resolve(onFrame(frame)).catch((err) => fail(err as Error));
+          pendingEncodes.push(encodePromise as Promise<void>);
+          framesCaptured++;
+          nextCaptureTime = startTime + framesCaptured * frameInterval;
+          onProgress(framesCaptured / totalFrames);
+        }
+
+        vrvfc.requestVideoFrameCallback(captureFrame);
+      };
+
+      video.addEventListener('ended', finalize, { once: true });
+      video.addEventListener('error', () => fail(new Error('Video error during extraction')), { once: true });
+
+      video.playbackRate = playbackRate;
+      vrvfc.requestVideoFrameCallback(captureFrame);
+      video.play().catch((err) => fail(err as Error));
+    });
+  }
+
+  private streamWithRAF(
+    video: HTMLVideoElement,
+    fps: number,
+    startTime: number,
+    endTime: number,
+    totalFrames: number,
+    playbackRate: number,
+    onFrame: StreamingFrameHandler,
+    onProgress: (progress: number) => void
+  ): Promise<number> {
+    return new Promise((resolve, reject) => {
+      let framesCaptured = 0;
+      const frameInterval = 1 / fps;
+      let nextCaptureTime = startTime;
+      let settled = false;
+      let rafId = 0;
+      const pendingEncodes: Promise<void>[] = [];
+
+      const finalize = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        cancelAnimationFrame(rafId);
+        video.pause();
+        video.playbackRate = 1;
+        Promise.all(pendingEncodes)
+          .then(() => {
+            console.log(`Streamed ${framesCaptured} frames via RAF fallback (${playbackRate}x)`);
+            resolve(framesCaptured);
+          })
+          .catch(reject);
+      };
+
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        cancelAnimationFrame(rafId);
+        video.pause();
+        video.playbackRate = 1;
+        reject(error);
+      };
+
+      const timeout = setTimeout(() => {
+        if (framesCaptured > 0) finalize();
+        else fail(new Error('Frame streaming timed out'));
+      }, 120000);
+
+      const tick = () => {
+        if (settled) return;
+
+        if (framesCaptured >= totalFrames || video.currentTime >= endTime || video.paused || video.ended) {
+          finalize();
+          return;
+        }
+
+        while (video.currentTime >= nextCaptureTime && framesCaptured < totalFrames) {
+          const frame = this.processFrame(video);
+          const encodePromise = Promise.resolve(onFrame(frame)).catch((err) => fail(err as Error));
+          pendingEncodes.push(encodePromise as Promise<void>);
+          framesCaptured++;
+          nextCaptureTime = startTime + framesCaptured * frameInterval;
+          onProgress(framesCaptured / totalFrames);
+        }
+
+        rafId = requestAnimationFrame(tick);
+      };
+
+      video.addEventListener('ended', finalize, { once: true });
+
+      video.playbackRate = playbackRate;
+      rafId = requestAnimationFrame(tick);
+      video.play().catch((err) => fail(err as Error));
+    });
+  }
+
+  private waitForReady(video: HTMLVideoElement): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Video not ready')), 30000);
+      const onCanPlay = () => {
+        clearTimeout(timeout);
+        video.removeEventListener('canplay', onCanPlay);
+        resolve();
+      };
+      video.addEventListener('canplay', onCanPlay);
+    });
+  }
+
+  /**
+   * Seek to a target time and wait for the frame to be decoded.
+   * Always goes through attemptSeek to ensure the 'seeked' event fires.
+   */
+  private async seekTo(
     video: HTMLVideoElement,
     targetTime: number,
     timeout = 15000,
     maxRetries = 3
   ): Promise<void> {
-    // If already at target time (within tolerance), no need to seek
-    if (Math.abs(video.currentTime - targetTime) < 0.001) {
-      return;
-    }
-
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         await this.attemptSeek(video, targetTime, timeout);
-        return; // Success
+        return;
       } catch (error) {
         lastError = error as Error;
         console.warn(`Seek attempt ${attempt + 1}/${maxRetries} failed:`, lastError.message);
-
-        // Brief pause before retry
         if (attempt < maxRetries - 1) {
           await new Promise(resolve => setTimeout(resolve, 100));
         }
@@ -308,9 +514,6 @@ export class VideoProcessor {
     throw lastError || new Error('Video seek failed after retries');
   }
 
-  /**
-   * Single seek attempt with timeout.
-   */
   private attemptSeek(video: HTMLVideoElement, targetTime: number, timeout: number): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -339,11 +542,9 @@ export class VideoProcessor {
         reject(new Error(`Video seek error: ${(e as ErrorEvent).message || 'Unknown error'}`));
       };
 
-      // Add listeners BEFORE setting currentTime to prevent race condition
       video.addEventListener('seeked', onSeeked);
       video.addEventListener('error', onError);
 
-      // Set timeout to prevent infinite hang
       timeoutId = setTimeout(() => {
         if (resolved) return;
         resolved = true;
@@ -351,7 +552,6 @@ export class VideoProcessor {
         reject(new Error(`Video seek timed out after ${timeout}ms`));
       }, timeout);
 
-      // Now set the target time
       video.currentTime = targetTime;
     });
   }

@@ -15,6 +15,7 @@ export function TimelineSlider() {
   const startHandleRef = useRef<HTMLDivElement>(null);
   const endHandleRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
+  const thumbnailUrlsRef = useRef<string[]>([]);
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState<'start' | 'end' | 'playhead' | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -25,6 +26,7 @@ export function TimelineSlider() {
   const rafIdRef = useRef<number | null>(null);
   const pendingDragXRef = useRef<number | null>(null);
   const dragRafRef = useRef<number | null>(null);
+  const wasPlayingBeforeDragRef = useRef(false);
 
   const videoInfo = useVideoInfo();
   const videoElement = useAppStore((s) => s.videoElement);
@@ -35,6 +37,25 @@ export function TimelineSlider() {
   const setTrimEnd = useAppStore((s) => s.setTrimEnd);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
   const setIsScrubbing = useAppStore((s) => s.setIsScrubbing);
+
+  const revokeThumbnailUrls = useCallback((urls: string[]) => {
+    for (const url of urls) {
+      URL.revokeObjectURL(url);
+    }
+  }, []);
+
+  const canvasToThumbnailUrl = useCallback((canvas: HTMLCanvasElement) => {
+    return new Promise<string>((resolve) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          // Fallback to data URL when blob encoding fails.
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+          return;
+        }
+        resolve(URL.createObjectURL(blob));
+      }, 'image/jpeg', 0.85);
+    });
+  }, []);
 
   // Track container width
   useEffect(() => {
@@ -51,6 +72,7 @@ export function TimelineSlider() {
   // Extract thumbnails from video
   useEffect(() => {
     if (!videoElement || !videoInfo || videoInfo.duration <= 0) return;
+    let cancelled = false;
 
     const extractThumbnails = async () => {
       const canvas = document.createElement('canvas');
@@ -58,15 +80,20 @@ export function TimelineSlider() {
       if (!ctx) return;
 
       const aspectRatio = videoInfo.width / videoInfo.height;
-      const thumbWidth = Math.round(THUMBNAIL_HEIGHT * aspectRatio);
+      const previewHeight = containerRef.current?.clientHeight || THUMBNAIL_HEIGHT;
+      const renderScale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const thumbHeight = Math.max(THUMBNAIL_HEIGHT, Math.round(previewHeight * renderScale));
+      const thumbWidth = Math.max(1, Math.round(thumbHeight * aspectRatio));
       canvas.width = thumbWidth;
-      canvas.height = THUMBNAIL_HEIGHT;
+      canvas.height = thumbHeight;
 
       const thumbs: string[] = [];
       const tempVideo = document.createElement('video');
       tempVideo.src = videoInfo.src;
       tempVideo.crossOrigin = 'anonymous';
       tempVideo.muted = true;
+      tempVideo.playsInline = true;
+      tempVideo.preload = 'auto';
 
       await new Promise<void>((resolve) => {
         tempVideo.onloadeddata = () => resolve();
@@ -74,23 +101,44 @@ export function TimelineSlider() {
       });
 
       for (let i = 0; i < THUMBNAIL_COUNT; i++) {
+        if (cancelled) return;
         const time = (i / (THUMBNAIL_COUNT - 1)) * videoInfo.duration;
         tempVideo.currentTime = time;
 
         await new Promise<void>((resolve) => {
           tempVideo.onseeked = () => {
-            ctx.drawImage(tempVideo, 0, 0, thumbWidth, THUMBNAIL_HEIGHT);
-            thumbs.push(canvas.toDataURL('image/jpeg', 0.6));
-            resolve();
+            ctx.drawImage(tempVideo, 0, 0, thumbWidth, thumbHeight);
+            canvasToThumbnailUrl(canvas).then((url) => {
+              thumbs.push(url);
+              resolve();
+            });
           };
         });
       }
 
-      setThumbnails(thumbs);
+      if (!cancelled) {
+        revokeThumbnailUrls(thumbnailUrlsRef.current);
+        thumbnailUrlsRef.current = thumbs;
+        setThumbnails(thumbs);
+      } else {
+        revokeThumbnailUrls(thumbs);
+      }
     };
 
     extractThumbnails();
-  }, [videoElement, videoInfo]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [videoElement, videoInfo, canvasToThumbnailUrl, revokeThumbnailUrls]);
+
+  // Revoke generated thumbnail URLs on unmount.
+  useEffect(() => {
+    return () => {
+      revokeThumbnailUrls(thumbnailUrlsRef.current);
+      thumbnailUrlsRef.current = [];
+    };
+  }, [revokeThumbnailUrls]);
 
   // Calculate positions
   const trackWidth = Math.max(0, containerWidth - HANDLE_WIDTH * 2);
@@ -154,22 +202,56 @@ export function TimelineSlider() {
     };
   }, []);
 
+  const finalizeScrub = useCallback(() => {
+    setIsDragging(null);
+    setIsScrubbing(false);
+
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+
+    if (pendingSeekRef.current !== null && videoElement) {
+      if (typeof videoElement.fastSeek === 'function') {
+        videoElement.fastSeek(pendingSeekRef.current);
+      } else {
+        videoElement.currentTime = pendingSeekRef.current;
+      }
+      setCurrentTime(pendingSeekRef.current);
+      pendingSeekRef.current = null;
+    }
+
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+    pendingDragXRef.current = null;
+
+    if (videoElement && wasPlayingBeforeDragRef.current) {
+      videoElement.play().catch(() => {
+        // Ignore gesture-related play rejections during scrub resume.
+      });
+    }
+    wasPlayingBeforeDragRef.current = false;
+  }, [setCurrentTime, setIsScrubbing, videoElement]);
+
   // Handle dragging start
   const handleMouseDown = useCallback((type: 'start' | 'end' | 'playhead') => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(type);
     setIsScrubbing(true);
+    wasPlayingBeforeDragRef.current = !!videoElement && !videoElement.paused;
 
     // Pause video when starting to drag
-    if (videoElement && !videoElement.paused) {
+    if (wasPlayingBeforeDragRef.current && videoElement) {
       videoElement.pause();
     }
   }, [videoElement, setIsScrubbing]);
 
   // Handle click on track to seek
   const handleTrackClick = useCallback((e: React.MouseEvent) => {
-    if (!containerRef.current || !videoElement || !videoInfo) return;
+    if (!containerRef.current || !videoElement || !videoInfo || trackWidth <= 0) return;
 
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left - HANDLE_WIDTH;
@@ -225,24 +307,8 @@ export function TimelineSlider() {
 
   // Handle mouse up - end dragging
   const handleMouseUp = useCallback(() => {
-    setIsDragging(null);
-    setIsScrubbing(false);
-
-    // Perform final seek with the pending position if any
-    if (pendingSeekRef.current !== null && videoElement) {
-      if (typeof videoElement.fastSeek === 'function') {
-        videoElement.fastSeek(pendingSeekRef.current);
-      } else {
-        videoElement.currentTime = pendingSeekRef.current;
-      }
-      setCurrentTime(pendingSeekRef.current);
-      pendingSeekRef.current = null;
-    }
-    if (dragRafRef.current !== null) {
-      cancelAnimationFrame(dragRafRef.current);
-      dragRafRef.current = null;
-    }
-  }, [setCurrentTime, setIsScrubbing, videoElement]);
+    finalizeScrub();
+  }, [finalizeScrub]);
 
   // Keyboard navigation for handles
   const handleKeyDown = useCallback((type: 'start' | 'end' | 'playhead') => (e: React.KeyboardEvent) => {
@@ -307,8 +373,9 @@ export function TimelineSlider() {
     e.preventDefault();
     setIsDragging(type);
     setIsScrubbing(true);
+    wasPlayingBeforeDragRef.current = !!videoElement && !videoElement.paused;
 
-    if (videoElement && !videoElement.paused) {
+    if (wasPlayingBeforeDragRef.current && videoElement) {
       videoElement.pause();
     }
   }, [videoElement, setIsScrubbing]);
@@ -322,23 +389,8 @@ export function TimelineSlider() {
   }, [isDragging, queueDragUpdate]);
 
   const handleTouchEnd = useCallback(() => {
-    setIsDragging(null);
-    setIsScrubbing(false);
-
-    if (pendingSeekRef.current !== null && videoElement) {
-      if (typeof videoElement.fastSeek === 'function') {
-        videoElement.fastSeek(pendingSeekRef.current);
-      } else {
-        videoElement.currentTime = pendingSeekRef.current;
-      }
-      setCurrentTime(pendingSeekRef.current);
-      pendingSeekRef.current = null;
-    }
-    if (dragRafRef.current !== null) {
-      cancelAnimationFrame(dragRafRef.current);
-      dragRafRef.current = null;
-    }
-  }, [setCurrentTime, setIsScrubbing, videoElement]);
+    finalizeScrub();
+  }, [finalizeScrub]);
 
   // Add/remove global mouse/touch listeners during drag
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { writeFile } from 'fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,6 +64,26 @@ ipcMain.handle('dialog:openFile', async () => {
     ],
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('dialog:openVideo', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [
+      { name: 'Videos', extensions: ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v'] },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const filePath = result.filePaths[0];
+  return {
+    path: filePath,
+    name: filePath.split(/[\\/]/).pop() || 'video',
+    url: pathToFileURL(filePath).href,
+  };
 });
 
 ipcMain.handle('dialog:saveFile', async (_, options: { defaultPath?: string; filters?: Electron.FileFilter[] }) => {

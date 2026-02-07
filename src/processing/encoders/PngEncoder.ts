@@ -48,17 +48,11 @@ export async function encodePngSequence(
 
     // Convert RGBA pixels to ImageData on source canvas
     const imageData = srcCtx.createImageData(frameWidth, frameHeight);
-
-    // WebGL pixels are flipped vertically
-    for (let y = 0; y < frameHeight; y++) {
-      for (let x = 0; x < frameWidth; x++) {
-        const srcIdx = ((frameHeight - 1 - y) * frameWidth + x) * 4;
-        const dstIdx = (y * frameWidth + x) * 4;
-        imageData.data[dstIdx] = frame.pixels[srcIdx];
-        imageData.data[dstIdx + 1] = frame.pixels[srcIdx + 1];
-        imageData.data[dstIdx + 2] = frame.pixels[srcIdx + 2];
-        imageData.data[dstIdx + 3] = 255;
-      }
+    // Pixels are already in correct orientation from RenderPipeline
+    imageData.data.set(frame.pixels);
+    // Ensure alpha is fully opaque
+    for (let i = 3; i < imageData.data.length; i += 4) {
+      imageData.data[i] = 255;
     }
 
     srcCtx.putImageData(imageData, 0, 0);

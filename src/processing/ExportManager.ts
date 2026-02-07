@@ -1,8 +1,19 @@
 import { getVideoProcessor, type ProcessingSettings } from './VideoProcessor';
-import { encodeMp4, extractAudioFromVideo, type AudioExportSettings } from './encoders/Mp4Encoder';
+import { encodeMp4, extractAudioFromVideo, muxMp4WithSourceAudio, type AudioExportSettings } from './encoders/Mp4Encoder';
+import { WebCodecsEncoder, isWebCodecsSupported } from './encoders/WebCodecsEncoder';
 import { encodeGif } from './encoders/GifEncoder';
 import { encodePngSequence } from './encoders/PngEncoder';
 import type { ExportFormat } from '../state/store';
+
+function isMacEnvironment(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+
+  const userAgent = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  return /Macintosh|Mac OS X/i.test(userAgent) || /Mac/i.test(platform);
+}
 
 export interface SourceVideoDimensions {
   width: number;
@@ -45,32 +56,96 @@ export async function exportVideo(
   const startTime = trimRange ? trimRange.start * duration : 0;
   const endTime = trimRange ? trimRange.end * duration : duration;
 
-  // Extract frames (0-50% of progress)
-  const frames = await processor.extractFrames(
-    videoElement,
-    fps,
-    (p) => onProgress(p * 0.5),
-    startTime,
-    endTime
-  );
-
-  // Encode based on format (50-100% of progress)
   let blob: Blob;
 
   switch (format) {
     case 'mp4': {
-      // Extract audio from original video using FFmpeg
-      console.log('Starting MP4 export, video src:', videoElement.src);
+      const isMac = isMacEnvironment();
+      const webCodecsAllowed = !isMac;
+      console.log(`MP4 export encoder selection: webCodecsAllowed=${webCodecsAllowed}, isMac=${isMac}`);
+      const webCodecsSupport = webCodecsAllowed
+        ? await isWebCodecsSupported()
+        : { supported: false, reason: 'Disabled on macOS for export stability' };
+
+      if (webCodecsSupport.supported) {
+        console.log('Using WebCodecs streaming export for MP4');
+
+        const needsAudio = !!videoElement.src;
+
+        processor.setSourceVideoDimensions(videoElement.videoWidth, videoElement.videoHeight);
+        const processingDims = processor.getProcessingDimensions();
+        const encoder = new WebCodecsEncoder({
+          fps,
+          frameWidth: processingDims.width,
+          frameHeight: processingDims.height,
+        });
+
+        let webCodecsVideoBlob: Blob | null = null;
+
+        try {
+          await processor.extractFramesStreaming(
+            videoElement,
+            fps,
+            async (frame) => {
+              await encoder.encodeFrame(frame);
+            },
+            (p) => onProgress(Math.min(0.88, p * 0.88)),
+            startTime,
+            endTime
+          );
+
+          onProgress(0.9);
+          webCodecsVideoBlob = await encoder.finalize();
+        } catch (error) {
+          encoder.close();
+          console.warn('WebCodecs export failed, falling back to FFmpeg:', error);
+        }
+
+        if (webCodecsVideoBlob) {
+          blob = webCodecsVideoBlob;
+
+          if (needsAudio) {
+            try {
+              onProgress(0.92);
+              blob = await muxMp4WithSourceAudio(
+                webCodecsVideoBlob,
+                videoElement.src,
+                startTime,
+                endTime,
+                enableAudioBitcrush,
+                audioSettings,
+                (p) => onProgress(0.92 + p * 0.08)
+              );
+            } catch (audioMuxError) {
+              console.warn('Audio mux failed for WebCodecs export, returning video-only MP4:', audioMuxError);
+            }
+          }
+
+          onProgress(1);
+          break;
+        }
+      } else {
+        console.warn('WebCodecs not supported, falling back to FFmpeg export:', webCodecsSupport.reason);
+      }
+
+      console.log('Starting MP4 export (FFmpeg), video src:', videoElement.src);
       console.log('Audio bitcrush enabled:', enableAudioBitcrush);
       console.log('Trim range:', startTime, '-', endTime);
 
-      let audioBlob: Blob | null = null;
-      try {
-        audioBlob = await extractAudioFromVideo(videoElement.src, startTime, endTime);
-        console.log('Audio extraction result:', audioBlob ? `Blob size: ${audioBlob.size}` : 'null');
-      } catch (e) {
-        console.warn('Could not extract audio:', e);
-      }
+      // Start audio extraction in parallel with frame extraction
+      const audioPromise = extractAudioFromVideo(videoElement.src, startTime, endTime)
+        .catch((e) => { console.warn('Could not extract audio:', e); return null; });
+
+      const frames = await processor.extractFrames(
+        videoElement,
+        fps,
+        (p) => onProgress(p * 0.5),
+        startTime,
+        endTime
+      );
+
+      const audioBlob = await audioPromise;
+      console.log('Audio extraction result:', audioBlob ? `Blob size: ${audioBlob.size}` : 'null');
 
       blob = await encodeMp4(
         frames,
@@ -84,6 +159,13 @@ export async function exportVideo(
       break;
     }
     case 'gif': {
+      const frames = await processor.extractFrames(
+        videoElement,
+        fps,
+        (p) => onProgress(p * 0.5),
+        startTime,
+        endTime
+      );
       blob = await encodeGif(
         frames,
         fps,
@@ -93,6 +175,13 @@ export async function exportVideo(
       break;
     }
     case 'png': {
+      const frames = await processor.extractFrames(
+        videoElement,
+        fps,
+        (p) => onProgress(p * 0.5),
+        startTime,
+        endTime
+      );
       blob = await encodePngSequence(
         frames,
         (p) => onProgress(0.5 + p * 0.5),

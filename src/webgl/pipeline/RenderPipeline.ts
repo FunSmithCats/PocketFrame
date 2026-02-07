@@ -561,6 +561,19 @@ export class RenderPipeline {
     gl.readPixels(0, 0, this.processWidth, this.processHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
+    // Flip pixels from bottom-to-top (WebGL) to top-to-bottom (standard image format)
+    const rowBytes = this.processWidth * 4;
+    const halfHeight = Math.floor(this.processHeight / 2);
+    const tempRow = new Uint8Array(rowBytes);
+    for (let y = 0; y < halfHeight; y++) {
+      const topOffset = y * rowBytes;
+      const bottomOffset = (this.processHeight - 1 - y) * rowBytes;
+      // Swap rows
+      tempRow.set(pixels.subarray(topOffset, topOffset + rowBytes));
+      pixels.set(pixels.subarray(bottomOffset, bottomOffset + rowBytes), topOffset);
+      pixels.set(tempRow, bottomOffset);
+    }
+
     return pixels;
   }
 

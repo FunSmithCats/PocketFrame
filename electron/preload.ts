@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   openFile: () => ipcRenderer.invoke('dialog:openFile'),
+  openVideo: () => ipcRenderer.invoke('dialog:openVideo'),
   saveFile: (options: { defaultPath?: string; filters?: { name: string; extensions: string[] }[] }) =>
     ipcRenderer.invoke('dialog:saveFile', options),
   writeFile: (filePath: string, data: ArrayBuffer) =>
@@ -15,6 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
 export type ElectronAPI = {
   openFile: () => Promise<string | null>;
+  openVideo: () => Promise<{ path: string; name: string; url: string } | null>;
   saveFile: (options: { defaultPath?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>;
   writeFile: (filePath: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   minimize: () => Promise<void>;
