@@ -25,6 +25,12 @@ function App() {
   const contrast = useAppStore((s) => s.contrast);
   const ditherMode = useAppStore((s) => s.ditherMode);
   const palette = useAppStore((s) => s.palette);
+  const invertPalette = useAppStore((s) => s.invertPalette);
+  const enableLcdEffects = useAppStore((s) => s.enableLcdEffects);
+  const lcdGridIntensity = useAppStore((s) => s.lcdGridIntensity);
+  const lcdShadowOpacity = useAppStore((s) => s.lcdShadowOpacity);
+  const lcdGhostingStrength = useAppStore((s) => s.lcdGhostingStrength);
+  const lcdBaselineAlpha = useAppStore((s) => s.lcdBaselineAlpha);
   const enableAudioBitcrush = useAppStore((s) => s.enableAudioBitcrush);
   const audioHighpass = useAppStore((s) => s.audioHighpass);
   const audioLowpass = useAppStore((s) => s.audioLowpass);
@@ -129,6 +135,14 @@ function App() {
           contrast,
           ditherMode,
           palette,
+          invertPalette,
+          lcd: {
+            enabled: enableLcdEffects,
+            gridIntensity: lcdGridIntensity,
+            shadowOpacity: lcdShadowOpacity,
+            ghostingStrength: lcdGhostingStrength,
+            baselineAlpha: lcdBaselineAlpha,
+          },
         },
         enableAudioBitcrush,
         audioSettings: {
@@ -174,7 +188,7 @@ function App() {
       setIsExporting(false);
       setExportProgress(0);
     }
-  }, [videoInfo, videoElement, contrast, ditherMode, palette, enableAudioBitcrush, audioHighpass, audioLowpass, audioBitDepth, audioDistortion, trimStart, trimEnd, targetFps, setIsExporting, setExportProgress]);
+  }, [videoInfo, videoElement, contrast, ditherMode, palette, invertPalette, enableLcdEffects, lcdGridIntensity, lcdShadowOpacity, lcdGhostingStrength, lcdBaselineAlpha, enableAudioBitcrush, audioHighpass, audioLowpass, audioBitDepth, audioDistortion, trimStart, trimEnd, targetFps, setIsExporting, setExportProgress]);
 
   const handleCloseExportDialog = useCallback(() => {
     setShowExportDialog(false);

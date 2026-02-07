@@ -9,7 +9,11 @@
     "build": "tsc && vite build && electron-builder",
     "preview": "vite preview",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && electron-builder"
+    "electron:build": "vite build && electron-builder",
+    "build:app": "NODE_ENV=production vite build",
+    "cli": "NODE_ENV=production vite build && NODE_ENV=production electron .",
+    "cli:built": "NODE_ENV=production electron .",
+    "test:cli": "node --test tests/cli/*.test.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

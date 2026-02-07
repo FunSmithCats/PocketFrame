@@ -17,8 +17,16 @@ in vec2 v_texCoord;
 out vec4 fragColor;
 
 void main() {
-  // Calculate pixel-aligned sampling (nearest neighbor base)
-  vec2 sourcePixel = floor(v_texCoord * u_sourceResolution);
+  // Derive source pixel mapping from actual target pixel position so grid aligns with
+  // the displayed Game Boy pixel blocks during resize.
+  vec2 sourcePixelSize = u_targetResolution / u_sourceResolution;
+  // gl_FragCoord is bottom-origin; convert to top-origin to match the rest of the pipeline.
+  vec2 targetPixel = vec2(
+    gl_FragCoord.x - 0.5,
+    u_targetResolution.y - gl_FragCoord.y - 0.5
+  );
+  vec2 sourcePixel = floor(targetPixel / sourcePixelSize);
+  sourcePixel = clamp(sourcePixel, vec2(0.0), u_sourceResolution - vec2(1.0));
   vec2 sampleCoord = (sourcePixel + 0.5) / u_sourceResolution;
 
   // Sample current frame
@@ -32,14 +40,17 @@ void main() {
   color = mix(color, prevColor, u_ghostingStrength);
 
   // === PIXEL GRID (DOT MATRIX) ===
-  // FIX: Use texture coordinates directly to get position within each source pixel
-  // This works correctly regardless of aspect ratio or scale factors
-  vec2 gridPos = fract(v_texCoord * u_sourceResolution);
-
-  // Smooth edges for grid lines (8% border on each side)
-  float gridX = smoothstep(0.0, 0.08, gridPos.x) * smoothstep(1.0, 0.92, gridPos.x);
-  float gridY = smoothstep(0.0, 0.08, gridPos.y) * smoothstep(1.0, 0.92, gridPos.y);
-  float gridMask = gridX * gridY;
+  // Build grid in target pixel space so one grid cell always matches one processed pixel.
+  // Draw 1-target-pixel grid lines when upscaling is at least 2x; otherwise skip.
+  float gridMask = 1.0;
+  if (sourcePixelSize.x >= 2.0 && sourcePixelSize.y >= 2.0) {
+    vec2 gridPos = mod(targetPixel, sourcePixelSize) / sourcePixelSize;
+    vec2 lineWidth = clamp(vec2(1.0) / sourcePixelSize, vec2(0.0), vec2(0.35));
+    float lineX = 1.0 - step(lineWidth.x, gridPos.x);
+    float lineY = 1.0 - step(lineWidth.y, gridPos.y);
+    float lineMask = max(lineX, lineY);
+    gridMask = 1.0 - lineMask;
+  }
 
   // Apply grid darkening
   float gridDarkness = 0.15;  // How dark the grid lines are

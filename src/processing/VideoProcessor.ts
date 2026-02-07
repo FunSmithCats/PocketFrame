@@ -1,6 +1,7 @@
 import { RenderPipeline } from '../webgl/pipeline/RenderPipeline';
 import type { DitherMode } from '../state/store';
-import type { PaletteName } from '../palettes';
+import { PALETTES, type Palette, type PaletteName } from '../palettes';
+import { floydSteinbergDither } from './dither/floydSteinberg';
 
 // Initial canvas size (will be resized when video dimensions are set)
 const INITIAL_SIZE = 160;
@@ -9,6 +10,14 @@ export interface ProcessingSettings {
   contrast: number;
   ditherMode: DitherMode;
   palette: PaletteName;
+  invertPalette: boolean;
+  lcd: {
+    enabled: boolean;
+    gridIntensity: number;
+    shadowOpacity: number;
+    ghostingStrength: number;
+    baselineAlpha: number;
+  };
 }
 
 export interface FrameData {
@@ -30,6 +39,19 @@ export class VideoProcessor {
   private pipeline: RenderPipeline;
   private processWidth = INITIAL_SIZE;
   private processHeight = INITIAL_SIZE;
+  private currentSettings: ProcessingSettings = {
+    contrast: 1.0,
+    ditherMode: 'bayer4x4',
+    palette: '1989Green',
+    invertPalette: false,
+    lcd: {
+      enabled: true,
+      gridIntensity: 0.7,
+      shadowOpacity: 0.35,
+      ghostingStrength: 0.3,
+      baselineAlpha: 0.05,
+    },
+  };
 
   constructor() {
     this.canvas = new OffscreenCanvas(INITIAL_SIZE, INITIAL_SIZE);
@@ -55,14 +77,40 @@ export class VideoProcessor {
   }
 
   setSettings(settings: ProcessingSettings): void {
+    this.currentSettings = settings;
     this.pipeline.setContrast(settings.contrast);
     this.pipeline.setDitherMode(settings.ditherMode);
     this.pipeline.setPalette(settings.palette);
+    this.pipeline.setInvertPalette(settings.invertPalette);
+    this.pipeline.setLcdEffectsEnabled(settings.lcd.enabled);
+    this.pipeline.setGridIntensity(settings.lcd.gridIntensity);
+    this.pipeline.setShadowOpacity(settings.lcd.shadowOpacity);
+    this.pipeline.setGhostingStrength(settings.lcd.ghostingStrength);
+    this.pipeline.setBaselineAlpha(settings.lcd.baselineAlpha);
   }
 
   processFrame(video: HTMLVideoElement): FrameData {
-    this.pipeline.renderProcessed(video);
-    const pixels = this.pipeline.getProcessedPixels();
+    let pixels: Uint8Array;
+
+    if (this.currentSettings.ditherMode === 'floydSteinberg') {
+      this.pipeline.renderProcessed(video);
+      const contrastPixels = this.pipeline.getContrastPixels();
+      const basePalette = PALETTES[this.currentSettings.palette];
+      const palette: Palette = this.currentSettings.invertPalette
+        ? [...basePalette].reverse() as Palette
+        : basePalette;
+      const floydPixels = floydSteinbergDither(
+        contrastPixels,
+        this.processWidth,
+        this.processHeight,
+        palette
+      );
+      this.pipeline.renderExportFromPixels(floydPixels, this.currentSettings.lcd.enabled);
+      pixels = this.pipeline.getProcessedPixels();
+    } else {
+      this.pipeline.renderProcessed(video);
+      pixels = this.pipeline.getProcessedPixels();
+    }
 
     return {
       pixels,

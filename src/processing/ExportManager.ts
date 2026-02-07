@@ -34,13 +34,24 @@ export interface ExportOptions {
   sourceVideoDimensions?: SourceVideoDimensions;
   trimRange?: TrimRange;
   onProgress: (progress: number) => void;
+  onPhaseProgress?: (phase: 'load' | 'extract' | 'encode' | 'write', value: number) => void;
 }
 
 export async function exportVideo(
   videoElement: HTMLVideoElement,
   options: ExportOptions
 ): Promise<Blob> {
-  const { format, fps, settings, enableAudioBitcrush, audioSettings, sourceVideoDimensions, trimRange, onProgress } = options;
+  const {
+    format,
+    fps,
+    settings,
+    enableAudioBitcrush,
+    audioSettings,
+    sourceVideoDimensions,
+    trimRange,
+    onProgress,
+    onPhaseProgress
+  } = options;
   const processor = getVideoProcessor();
 
   processor.setSettings(settings);
@@ -89,13 +100,19 @@ export async function exportVideo(
             async (frame) => {
               await encoder.encodeFrame(frame);
             },
-            (p) => onProgress(Math.min(0.88, p * 0.88)),
+            (p) => {
+              onPhaseProgress?.('extract', p);
+              onProgress(Math.min(0.88, p * 0.88));
+            },
             startTime,
             endTime
           );
 
+          onPhaseProgress?.('extract', 1);
+          onPhaseProgress?.('encode', 0.5);
           onProgress(0.9);
           webCodecsVideoBlob = await encoder.finalize();
+          onPhaseProgress?.('encode', 0.8);
         } catch (error) {
           encoder.close();
           console.warn('WebCodecs export failed, falling back to FFmpeg:', error);
@@ -114,13 +131,17 @@ export async function exportVideo(
                 endTime,
                 enableAudioBitcrush,
                 audioSettings,
-                (p) => onProgress(0.92 + p * 0.08)
+                (p) => {
+                  onPhaseProgress?.('encode', 0.8 + p * 0.2);
+                  onProgress(0.92 + p * 0.08);
+                }
               );
             } catch (audioMuxError) {
               console.warn('Audio mux failed for WebCodecs export, returning video-only MP4:', audioMuxError);
             }
           }
 
+          onPhaseProgress?.('encode', 1);
           onProgress(1);
           break;
         }
@@ -139,10 +160,14 @@ export async function exportVideo(
       const frames = await processor.extractFrames(
         videoElement,
         fps,
-        (p) => onProgress(p * 0.5),
+        (p) => {
+          onPhaseProgress?.('extract', p);
+          onProgress(p * 0.5);
+        },
         startTime,
         endTime
       );
+      onPhaseProgress?.('extract', 1);
 
       const audioBlob = await audioPromise;
       console.log('Audio extraction result:', audioBlob ? `Blob size: ${audioBlob.size}` : 'null');
@@ -152,41 +177,61 @@ export async function exportVideo(
         fps,
         audioBlob,
         enableAudioBitcrush,
-        (p) => onProgress(0.5 + p * 0.5),
+        (p) => {
+          onPhaseProgress?.('encode', p);
+          onProgress(0.5 + p * 0.5);
+        },
         audioSettings,
         sourceDims
       );
+      onPhaseProgress?.('encode', 1);
       break;
     }
     case 'gif': {
       const frames = await processor.extractFrames(
         videoElement,
         fps,
-        (p) => onProgress(p * 0.5),
+        (p) => {
+          onPhaseProgress?.('extract', p);
+          onProgress(p * 0.5);
+        },
         startTime,
         endTime
       );
+      onPhaseProgress?.('extract', 1);
       blob = await encodeGif(
         frames,
         fps,
-        (p) => onProgress(0.5 + p * 0.5),
+        (p) => {
+          onPhaseProgress?.('encode', p);
+          onProgress(0.5 + p * 0.5);
+        },
         sourceDims
       );
+      onPhaseProgress?.('encode', 1);
       break;
     }
     case 'png': {
       const frames = await processor.extractFrames(
         videoElement,
         fps,
-        (p) => onProgress(p * 0.5),
+        (p) => {
+          onPhaseProgress?.('extract', p);
+          onProgress(p * 0.5);
+        },
         startTime,
         endTime
       );
+      onPhaseProgress?.('extract', 1);
       blob = await encodePngSequence(
         frames,
-        (p) => onProgress(0.5 + p * 0.5),
+        (p) => {
+          onPhaseProgress?.('encode', p);
+          onProgress(0.5 + p * 0.5);
+        },
         sourceDims
       );
+      onPhaseProgress?.('encode', 1);
       break;
     }
   }

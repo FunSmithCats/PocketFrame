@@ -50,6 +50,7 @@ export class RenderPipeline {
   private contrastPass!: PassResources;
   private ditherPass!: PassResources;
   private upscalePass!: PassResources;
+  private exportPass!: PassResources;
 
   // Dither programs
   private noDitherProgram!: WebGLProgram;
@@ -88,10 +89,14 @@ export class RenderPipeline {
   private shadowOpacity = 0.35;
   private ghostingStrength = 0.3;
   private baselineAlpha = 0.05;
+  private lcdEffectsEnabled = true;
 
   // Previous frame texture for ghosting effect
   private previousFrameTexture!: WebGLTexture;
   private previousFrameFramebuffer!: WebGLFramebuffer;
+  private cpuInputTexture!: WebGLTexture;
+  private cpuInputFramebuffer!: WebGLFramebuffer;
+  private lastExportFramebuffer!: WebGLFramebuffer;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
@@ -169,9 +174,21 @@ export class RenderPipeline {
       framebuffer: upscaleFB,
     };
 
+    // Export pass texture (processing resolution, used when LCD effects are applied on export)
+    const exportTex = createTexture(gl, this.processWidth, this.processHeight);
+    const exportFB = createFramebuffer(gl, exportTex);
+    this.exportPass = {
+      program: upscaleProgram,
+      texture: exportTex,
+      framebuffer: exportFB,
+    };
+
     // Previous frame texture for ghosting effect (same size as dither output)
     this.previousFrameTexture = createTexture(gl, this.processWidth, this.processHeight);
     this.previousFrameFramebuffer = createFramebuffer(gl, this.previousFrameTexture);
+    this.cpuInputTexture = createTexture(gl, this.processWidth, this.processHeight);
+    this.cpuInputFramebuffer = createFramebuffer(gl, this.cpuInputTexture);
+    this.lastExportFramebuffer = this.ditherPass.framebuffer;
   }
 
   private recreateProcessingTextures(): void {
@@ -184,8 +201,12 @@ export class RenderPipeline {
     gl.deleteFramebuffer(this.contrastPass.framebuffer);
     gl.deleteTexture(this.ditherPass.texture);
     gl.deleteFramebuffer(this.ditherPass.framebuffer);
+    gl.deleteTexture(this.exportPass.texture);
+    gl.deleteFramebuffer(this.exportPass.framebuffer);
     gl.deleteTexture(this.previousFrameTexture);
     gl.deleteFramebuffer(this.previousFrameFramebuffer);
+    gl.deleteTexture(this.cpuInputTexture);
+    gl.deleteFramebuffer(this.cpuInputFramebuffer);
 
     // Create new textures with dynamic resolution
     const downsampleTex = createTexture(gl, this.processWidth, this.processHeight);
@@ -203,8 +224,16 @@ export class RenderPipeline {
     this.ditherPass.texture = ditherTex;
     this.ditherPass.framebuffer = ditherFB;
 
+    const exportTex = createTexture(gl, this.processWidth, this.processHeight);
+    const exportFB = createFramebuffer(gl, exportTex);
+    this.exportPass.texture = exportTex;
+    this.exportPass.framebuffer = exportFB;
+
     this.previousFrameTexture = createTexture(gl, this.processWidth, this.processHeight);
     this.previousFrameFramebuffer = createFramebuffer(gl, this.previousFrameTexture);
+    this.cpuInputTexture = createTexture(gl, this.processWidth, this.processHeight);
+    this.cpuInputFramebuffer = createFramebuffer(gl, this.cpuInputTexture);
+    this.lastExportFramebuffer = this.ditherPass.framebuffer;
   }
 
   setSourceVideoInfo(width: number, height: number): void {
@@ -220,7 +249,11 @@ export class RenderPipeline {
     this.recreateProcessingTextures();
 
     // Recalculate viewport with new aspect ratio
-    this.viewport = calculateLetterboxViewport(this.displayWidth, this.displayHeight, aspectRatio);
+    this.viewport = calculateLetterboxViewport(this.displayWidth, this.displayHeight, aspectRatio, {
+      sourceWidth: this.processWidth,
+      sourceHeight: this.processHeight,
+      snapToIntegerScale: true,
+    });
 
     // Recreate upscale texture with new viewport size
     const gl = this.gl;
@@ -240,7 +273,11 @@ export class RenderPipeline {
   setDisplaySize(width: number, height: number): void {
     this.displayWidth = width;
     this.displayHeight = height;
-    this.viewport = calculateLetterboxViewport(width, height, this.sourceVideoInfo.aspectRatio);
+    this.viewport = calculateLetterboxViewport(width, height, this.sourceVideoInfo.aspectRatio, {
+      sourceWidth: this.processWidth,
+      sourceHeight: this.processHeight,
+      snapToIntegerScale: true,
+    });
 
     // Recreate upscale texture with viewport size (not container size)
     const gl = this.gl;
@@ -285,6 +322,10 @@ export class RenderPipeline {
 
   setInvertPalette(invert: boolean): void {
     this.currentInvertPalette = invert;
+  }
+
+  setLcdEffectsEnabled(enabled: boolean): void {
+    this.lcdEffectsEnabled = enabled;
   }
 
   // LCD effect setters
@@ -349,153 +390,46 @@ export class RenderPipeline {
     );
   }
 
-  render(video: HTMLVideoElement, splitPosition: number = 0.5, updateVideo: boolean = true): void {
-    const gl = this.gl;
+  private applyLcdUniforms(
+    gl: WebGL2RenderingContext,
+    program: WebGLProgram,
+    sourceWidth: number,
+    sourceHeight: number,
+    targetWidth: number,
+    targetHeight: number
+  ): void {
+    const sourceLoc = gl.getUniformLocation(program, 'u_sourceResolution');
+    const targetLoc = gl.getUniformLocation(program, 'u_targetResolution');
+    if (sourceLoc) gl.uniform2f(sourceLoc, sourceWidth, sourceHeight);
+    if (targetLoc) gl.uniform2f(targetLoc, targetWidth, targetHeight);
 
-    // Validate video dimensions to prevent NaN in shaders
-    const videoWidth = video.videoWidth || 1;
-    const videoHeight = video.videoHeight || 1;
-    const aspectRatio = videoWidth / videoHeight;
-
-    // Clamp split position to valid range
-    const clampedSplit = Math.max(0.0, Math.min(1.0, splitPosition));
-
-    // Only process video frames when updateVideo is true (throttled to target FPS)
-    // This allows the split slider to update at display refresh rate
-    if (updateVideo) {
-      // Update video texture
-      this.updateVideoTexture(video);
-
-      // Pass 1: Downsample + desaturate (using dynamic processing resolution)
-      this.renderPass(
-        this.downsamplePass.program,
-        this.videoTexture,
-        this.downsamplePass.framebuffer,
-        this.processWidth,
-        this.processHeight,
-        (gl, program) => {
-          const targetResLoc = gl.getUniformLocation(program, 'u_targetResolution');
-          const sourceResLoc = gl.getUniformLocation(program, 'u_sourceResolution');
-          if (targetResLoc) gl.uniform2f(targetResLoc, this.processWidth, this.processHeight);
-          if (sourceResLoc) gl.uniform2f(sourceResLoc, videoWidth, videoHeight);
-        }
-      );
-
-      // Pass 2: Contrast
-      this.renderPass(
-        this.contrastPass.program,
-        this.downsamplePass.texture,
-        this.contrastPass.framebuffer,
-        this.processWidth,
-        this.processHeight,
-        (gl, program) => {
-          const contrastLoc = gl.getUniformLocation(program, 'u_contrast');
-          if (contrastLoc) gl.uniform1f(contrastLoc, this.currentContrast);
-        }
-      );
-
-      // Pass 3: Dither + quantize
-      const paletteData = getPaletteAsFloat(this.currentPalette, this.currentInvertPalette);
-      this.renderPass(
-        this.ditherPass.program,
-        this.contrastPass.texture,
-        this.ditherPass.framebuffer,
-        this.processWidth,
-        this.processHeight,
-        (gl, program) => {
-          const resLoc = gl.getUniformLocation(program, 'u_resolution');
-          const paletteLoc = gl.getUniformLocation(program, 'u_palette');
-          if (resLoc) gl.uniform2f(resLoc, this.processWidth, this.processHeight);
-          if (paletteLoc) gl.uniform3fv(paletteLoc, paletteData);
-        }
-      );
-
-      // Pass 4: Upscale for display with LCD effects (render to viewport-sized texture)
-      this.renderPass(
-        this.upscalePass.program,
-        this.ditherPass.texture,
-        this.upscalePass.framebuffer,
-        this.viewport.width,
-        this.viewport.height,
-        (gl, program) => {
-          // Resolution uniforms
-          const sourceLoc = gl.getUniformLocation(program, 'u_sourceResolution');
-          const targetLoc = gl.getUniformLocation(program, 'u_targetResolution');
-          if (sourceLoc) gl.uniform2f(sourceLoc, this.processWidth, this.processHeight);
-          if (targetLoc) gl.uniform2f(targetLoc, this.viewport.width, this.viewport.height);
-
-          // Previous frame texture (for ghosting)
-          gl.activeTexture(gl.TEXTURE1);
-          gl.bindTexture(gl.TEXTURE_2D, this.previousFrameTexture);
-          const prevFrameLoc = gl.getUniformLocation(program, 'u_previousFrame');
-          if (prevFrameLoc) gl.uniform1i(prevFrameLoc, 1);
-
-          // LCD effect uniforms
-          const gridLoc = gl.getUniformLocation(program, 'u_gridIntensity');
-          const shadowLoc = gl.getUniformLocation(program, 'u_shadowOpacity');
-          const ghostLoc = gl.getUniformLocation(program, 'u_ghostingStrength');
-          const baselineLoc = gl.getUniformLocation(program, 'u_baselineAlpha');
-          if (gridLoc) gl.uniform1f(gridLoc, this.gridIntensity);
-          if (shadowLoc) gl.uniform1f(shadowLoc, this.shadowOpacity);
-          if (ghostLoc) gl.uniform1f(ghostLoc, this.ghostingStrength);
-          if (baselineLoc) gl.uniform1f(baselineLoc, this.baselineAlpha);
-        }
-      );
-
-      // Copy current frame to previous frame texture (for next frame's ghosting)
-      this.copyTexture(this.ditherPass.texture, this.previousFrameFramebuffer, this.processWidth, this.processHeight);
-    }
-
-    // Final pass: Split compositor to screen with letterbox/pillarbox
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-    // Clear entire canvas to black (for letterbox/pillarbox bars)
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    gl.clearColor(0.0, 0.0, 0.0, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
-    // Set viewport to letterbox/pillarbox area
-    gl.viewport(this.viewport.x, this.viewport.y, this.viewport.width, this.viewport.height);
-
-    gl.useProgram(this.splitProgram);
-    setupQuadAttributes(gl, this.splitProgram, this.quadBuffer);
-
-    // Bind original (upscaled video) to texture unit 0
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.videoTexture);
-
-    // Bind processed to texture unit 1
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.upscalePass.texture);
+    gl.bindTexture(gl.TEXTURE_2D, this.previousFrameTexture);
+    const prevFrameLoc = gl.getUniformLocation(program, 'u_previousFrame');
+    if (prevFrameLoc) gl.uniform1i(prevFrameLoc, 1);
 
-    const origLoc = gl.getUniformLocation(this.splitProgram, 'u_original');
-    const procLoc = gl.getUniformLocation(this.splitProgram, 'u_processed');
-    const splitLoc = gl.getUniformLocation(this.splitProgram, 'u_splitPosition');
-    const resLoc = gl.getUniformLocation(this.splitProgram, 'u_resolution');
-    const sourceAspectLoc = gl.getUniformLocation(this.splitProgram, 'u_sourceAspectRatio');
-    const viewportAspectLoc = gl.getUniformLocation(this.splitProgram, 'u_viewportAspectRatio');
+    const gridLoc = gl.getUniformLocation(program, 'u_gridIntensity');
+    const shadowLoc = gl.getUniformLocation(program, 'u_shadowOpacity');
+    const ghostLoc = gl.getUniformLocation(program, 'u_ghostingStrength');
+    const baselineLoc = gl.getUniformLocation(program, 'u_baselineAlpha');
 
-    if (origLoc) gl.uniform1i(origLoc, 0);
-    if (procLoc) gl.uniform1i(procLoc, 1);
-    if (splitLoc) gl.uniform1f(splitLoc, clampedSplit);
-    if (resLoc) gl.uniform2f(resLoc, this.viewport.width, this.viewport.height);
-    if (sourceAspectLoc) gl.uniform1f(sourceAspectLoc, aspectRatio);
-    if (viewportAspectLoc) gl.uniform1f(viewportAspectLoc, this.sourceVideoInfo.aspectRatio);
+    const gridIntensity = this.lcdEffectsEnabled ? this.gridIntensity : 0;
+    const shadowOpacity = this.lcdEffectsEnabled ? this.shadowOpacity : 0;
+    const ghostingStrength = this.lcdEffectsEnabled ? this.ghostingStrength : 0;
+    const baselineAlpha = this.lcdEffectsEnabled ? this.baselineAlpha : 0;
 
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    if (gridLoc) gl.uniform1f(gridLoc, gridIntensity);
+    if (shadowLoc) gl.uniform1f(shadowLoc, shadowOpacity);
+    if (ghostLoc) gl.uniform1f(ghostLoc, ghostingStrength);
+    if (baselineLoc) gl.uniform1f(baselineLoc, baselineAlpha);
   }
 
-  // Render without split (for export)
-  renderProcessed(video: HTMLVideoElement): void {
-    const gl = this.gl;
-
-    // Validate video dimensions to prevent NaN in shaders
+  private runSharedBasePasses(video: HTMLVideoElement): void {
     const videoWidth = video.videoWidth || 1;
     const videoHeight = video.videoHeight || 1;
 
     this.updateVideoTexture(video);
 
-    // Same passes as render() using dynamic processing resolution
     this.renderPass(
       this.downsamplePass.program,
       this.videoTexture,
@@ -537,27 +471,170 @@ export class RenderPipeline {
       }
     );
 
-    // Render to screen (native processing resolution)
+    this.lastExportFramebuffer = this.ditherPass.framebuffer;
+  }
+
+  render(video: HTMLVideoElement, splitPosition: number = 0.5, updateVideo: boolean = true): void {
+    const gl = this.gl;
+
+    // Validate video dimensions to prevent NaN in shaders
+    const videoWidth = video.videoWidth || 1;
+    const videoHeight = video.videoHeight || 1;
+    const aspectRatio = videoWidth / videoHeight;
+
+    // Clamp split position to valid range
+    const clampedSplit = Math.max(0.0, Math.min(1.0, splitPosition));
+
+    // Only process video frames when updateVideo is true (throttled to target FPS)
+    // This allows the split slider to update at display refresh rate
+    if (updateVideo) {
+      this.runSharedBasePasses(video);
+
+      // Pass 4: Upscale for display with LCD effects (render to viewport-sized texture)
+      this.renderPass(
+        this.upscalePass.program,
+        this.ditherPass.texture,
+        this.upscalePass.framebuffer,
+        this.viewport.width,
+        this.viewport.height,
+        (gl, program) => this.applyLcdUniforms(
+          gl,
+          program,
+          this.processWidth,
+          this.processHeight,
+          this.viewport.width,
+          this.viewport.height
+        )
+      );
+
+      // Copy current frame to previous frame texture (for next frame's ghosting)
+      this.copyTexture(this.ditherPass.texture, this.previousFrameFramebuffer, this.processWidth, this.processHeight);
+    }
+
+    // Final pass: Split compositor to screen with letterbox/pillarbox
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.processWidth, this.processHeight);
 
-    gl.useProgram(this.passthroughProgram);
-    setupQuadAttributes(gl, this.passthroughProgram, this.quadBuffer);
+    // Clear entire canvas to black (for letterbox/pillarbox bars)
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
 
+    // Set viewport to letterbox/pillarbox area
+    gl.viewport(this.viewport.x, this.viewport.y, this.viewport.width, this.viewport.height);
+
+    gl.useProgram(this.splitProgram);
+    setupQuadAttributes(gl, this.splitProgram, this.quadBuffer);
+
+    // Bind original (upscaled video) to texture unit 0
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.ditherPass.texture);
+    gl.bindTexture(gl.TEXTURE_2D, this.videoTexture);
 
-    const texLoc = gl.getUniformLocation(this.passthroughProgram, 'u_texture');
-    if (texLoc) gl.uniform1i(texLoc, 0);
+    // Bind processed to texture unit 1
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.upscalePass.texture);
+
+    const origLoc = gl.getUniformLocation(this.splitProgram, 'u_original');
+    const procLoc = gl.getUniformLocation(this.splitProgram, 'u_processed');
+    const splitLoc = gl.getUniformLocation(this.splitProgram, 'u_splitPosition');
+    const resLoc = gl.getUniformLocation(this.splitProgram, 'u_resolution');
+    const sourceAspectLoc = gl.getUniformLocation(this.splitProgram, 'u_sourceAspectRatio');
+    const viewportAspectLoc = gl.getUniformLocation(this.splitProgram, 'u_viewportAspectRatio');
+
+    if (origLoc) gl.uniform1i(origLoc, 0);
+    if (procLoc) gl.uniform1i(procLoc, 1);
+    if (splitLoc) gl.uniform1f(splitLoc, clampedSplit);
+    if (resLoc) gl.uniform2f(resLoc, this.viewport.width, this.viewport.height);
+    if (sourceAspectLoc) gl.uniform1f(sourceAspectLoc, aspectRatio);
+    if (viewportAspectLoc) gl.uniform1f(viewportAspectLoc, this.viewport.width / this.viewport.height);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
+  // Render without split (for export)
+  renderProcessed(video: HTMLVideoElement): void {
+    this.runSharedBasePasses(video);
+
+    if (this.lcdEffectsEnabled) {
+      this.renderPass(
+        this.exportPass.program,
+        this.ditherPass.texture,
+        this.exportPass.framebuffer,
+        this.processWidth,
+        this.processHeight,
+        (gl, program) => this.applyLcdUniforms(
+          gl,
+          program,
+          this.processWidth,
+          this.processHeight,
+          this.processWidth,
+          this.processHeight
+        )
+      );
+      this.lastExportFramebuffer = this.exportPass.framebuffer;
+    } else {
+      this.lastExportFramebuffer = this.ditherPass.framebuffer;
+    }
+
+    this.copyTexture(this.ditherPass.texture, this.previousFrameFramebuffer, this.processWidth, this.processHeight);
+  }
+
+  renderExportFromPixels(pixels: Uint8Array, applyLcdEffects: boolean = this.lcdEffectsEnabled): void {
+    this.uploadPixelsToCpuTexture(pixels);
+
+    if (applyLcdEffects) {
+      this.renderPass(
+        this.exportPass.program,
+        this.cpuInputTexture,
+        this.exportPass.framebuffer,
+        this.processWidth,
+        this.processHeight,
+        (gl, program) => this.applyLcdUniforms(
+          gl,
+          program,
+          this.processWidth,
+          this.processHeight,
+          this.processWidth,
+          this.processHeight
+        )
+      );
+      this.lastExportFramebuffer = this.exportPass.framebuffer;
+    } else {
+      this.lastExportFramebuffer = this.cpuInputFramebuffer;
+    }
+
+    this.copyTexture(this.cpuInputTexture, this.previousFrameFramebuffer, this.processWidth, this.processHeight);
+  }
+
+  getContrastPixels(): Uint8Array {
+    return this.readPixelsFromFramebuffer(this.contrastPass.framebuffer);
+  }
+
   getProcessedPixels(): Uint8Array {
+    return this.readPixelsFromFramebuffer(this.lastExportFramebuffer);
+  }
+
+  private uploadPixelsToCpuTexture(pixels: Uint8Array): void {
+    const gl = this.gl;
+
+    gl.bindTexture(gl.TEXTURE_2D, this.cpuInputTexture);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      this.processWidth,
+      this.processHeight,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      pixels
+    );
+  }
+
+  private readPixelsFromFramebuffer(framebuffer: WebGLFramebuffer): Uint8Array {
     const gl = this.gl;
     const pixels = new Uint8Array(this.processWidth * this.processHeight * 4);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ditherPass.framebuffer);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
     gl.readPixels(0, 0, this.processWidth, this.processHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
@@ -601,6 +678,10 @@ export class RenderPipeline {
       gl.deleteTexture(pass.texture);
       gl.deleteFramebuffer(pass.framebuffer);
     }
+    gl.deleteTexture(this.exportPass.texture);
+    gl.deleteFramebuffer(this.exportPass.framebuffer);
+    gl.deleteTexture(this.cpuInputTexture);
+    gl.deleteFramebuffer(this.cpuInputFramebuffer);
 
     // Delete previous frame resources for ghosting
     gl.deleteTexture(this.previousFrameTexture);

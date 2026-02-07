@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pocketframe.dev/schema/job.v1.json",
+  "title": "PocketFrame CLI Job v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "inputPath", "modeConfig"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "inputPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outputPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format"],
+      "properties": {
+        "format": {
+          "const": "mp4"
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contrast": { "type": "number" },
+        "ditherMode": {
+          "type": "string",
+          "enum": ["none", "bayer2x2", "bayer4x4", "floydSteinberg"]
+        },
+        "palette": {
+          "type": "string",
+          "enum": ["1989Green", "PocketGrey", "MidnightBlue", "HighContrastBW", "RedBlack"]
+        },
+        "invertPalette": { "type": "boolean" },
+        "targetFps": { "type": "number" },
+        "enableAudioBitcrush": { "type": "boolean" },
+        "audio": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "highpass": { "type": "number" },
+            "lowpass": { "type": "number" },
+            "bitDepth": { "type": "number" },
+            "distortion": { "type": "number" }
+          }
+        },
+        "lcd": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "gridIntensity": { "type": "number" },
+            "shadowOpacity": { "type": "number" },
+            "ghostingStrength": { "type": "number" },
+            "baselineAlpha": { "type": "number" }
+          }
+        },
+        "trim": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "startSec": { "type": "number", "minimum": 0 },
+            "endSec": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

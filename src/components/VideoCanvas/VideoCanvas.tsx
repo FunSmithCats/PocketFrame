@@ -136,6 +136,11 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
         pipelineRef.current?.setDitherMode(state.ditherMode);
         pipelineRef.current?.setPalette(state.palette);
         pipelineRef.current?.setInvertPalette(state.invertPalette);
+        pipelineRef.current?.setLcdEffectsEnabled(state.enableLcdEffects);
+        pipelineRef.current?.setGridIntensity(state.lcdGridIntensity);
+        pipelineRef.current?.setShadowOpacity(state.lcdShadowOpacity);
+        pipelineRef.current?.setGhostingStrength(state.lcdGhostingStrength);
+        pipelineRef.current?.setBaselineAlpha(state.lcdBaselineAlpha);
         if (containerRef.current) {
           const { width, height } = containerRef.current.getBoundingClientRect();
           const dpr = window.devicePixelRatio || 1;
@@ -177,6 +182,7 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
   // Sync LCD effect settings with pipeline
   useEffect(() => {
     if (!pipelineRef.current) return;
+    pipelineRef.current.setLcdEffectsEnabled(enableLcdEffects);
     if (enableLcdEffects) {
       pipelineRef.current.setGridIntensity(lcdGridIntensity);
       pipelineRef.current.setShadowOpacity(lcdShadowOpacity);
