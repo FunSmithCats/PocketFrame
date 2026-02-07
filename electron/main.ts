@@ -56,7 +56,15 @@ function parseAutomationCli(argv: string[]):
   | { mode: 'automation'; config: AutomationCliConfig } {
   const args = argv.slice(2);
 
-  if (args[0] === '--') {
+  // Skip the Electron app path (e.g. ".") and any "--" separators that
+  // appear before the automation command.  When launched via
+  // `electron . -- run --job ...`, argv[2] is "." and argv[3] is "--".
+  while (args.length > 0 && args[0] !== 'run' && args[0] !== 'inspect') {
+    const head = args[0];
+    // Stop skipping if we hit something that looks like a flag other than "--"
+    if (head.startsWith('-') && head !== '--') {
+      break;
+    }
     args.shift();
   }
 
@@ -221,7 +229,10 @@ function createWindow(): void {
     mainWindow.hide();
   }
 
-  mainWindow.webContents.once('did-finish-load', () => {
+  // Use dom-ready instead of did-finish-load for automation so external
+  // resource loads (e.g. Google Fonts) don't block the start in headless/CI.
+  const startEvent = isAutomation ? 'dom-ready' : 'did-finish-load';
+  mainWindow.webContents.once(startEvent, () => {
     if (isAutomation) {
       startAutomation();
     }
