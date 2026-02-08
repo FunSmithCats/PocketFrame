@@ -1,7 +1,6 @@
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import type { FrameData } from '../VideoProcessor';
 import { calculateScaledDimensions } from '../../utils';
-import { EXPORT_SCALE } from '../../constants';
 
 const DEFAULT_BITRATE_MULTIPLIER = 0.9; // bits per pixel per frame (near-lossless for pixel art)
 const MIN_VIDEO_BITRATE = 8_000_000;
@@ -73,7 +72,7 @@ export class WebCodecsEncoder {
 
   constructor(options: WebCodecsEncoderOptions) {
     const { fps, frameWidth, frameHeight } = options;
-    const outputDims = calculateScaledDimensions(frameWidth, frameHeight, EXPORT_SCALE.HIGH_QUALITY, true);
+    const outputDims = calculateScaledDimensions(frameWidth, frameHeight, 1, true);
 
     this.outputWidth = outputDims.width;
     this.outputHeight = outputDims.height;

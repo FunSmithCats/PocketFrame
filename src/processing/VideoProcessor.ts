@@ -1,5 +1,5 @@
 import { RenderPipeline } from '../webgl/pipeline/RenderPipeline';
-import type { DitherMode } from '../state/store';
+import type { CropRegionNormalized, DitherMode } from '../state/store';
 import { PALETTES, type Palette, type PaletteName } from '../palettes';
 import { floydSteinbergDither } from './dither/floydSteinberg';
 
@@ -8,6 +8,8 @@ const INITIAL_SIZE = 160;
 
 export interface ProcessingSettings {
   contrast: number;
+  cameraResponse: number;
+  cropRegion: CropRegionNormalized;
   ditherMode: DitherMode;
   palette: PaletteName;
   invertPalette: boolean;
@@ -25,6 +27,7 @@ export interface FrameData {
   width: number;
   height: number;
   timestamp: number;
+  preScaled?: boolean;
 }
 
 export type StreamingFrameHandler = (frame: FrameData) => void | Promise<void>;
@@ -39,8 +42,11 @@ export class VideoProcessor {
   private pipeline: RenderPipeline;
   private processWidth = INITIAL_SIZE;
   private processHeight = INITIAL_SIZE;
+  private exportScale = 1;
   private currentSettings: ProcessingSettings = {
     contrast: 1.0,
+    cameraResponse: 0.8,
+    cropRegion: { x: 0, y: 0, width: 1, height: 1 },
     ditherMode: 'bayer4x4',
     palette: '1989Green',
     invertPalette: false,
@@ -76,9 +82,16 @@ export class VideoProcessor {
     this.canvas.height = this.processHeight;
   }
 
+  setExportScale(scale: number): void {
+    const safeScale = Math.max(1, Math.round(scale));
+    this.exportScale = safeScale;
+  }
+
   setSettings(settings: ProcessingSettings): void {
     this.currentSettings = settings;
     this.pipeline.setContrast(settings.contrast);
+    this.pipeline.setCameraResponse(settings.cameraResponse);
+    this.pipeline.setCropRegion(settings.cropRegion);
     this.pipeline.setDitherMode(settings.ditherMode);
     this.pipeline.setPalette(settings.palette);
     this.pipeline.setInvertPalette(settings.invertPalette);
@@ -93,7 +106,7 @@ export class VideoProcessor {
     let pixels: Uint8Array;
 
     if (this.currentSettings.ditherMode === 'floydSteinberg') {
-      this.pipeline.renderProcessed(video);
+      this.pipeline.renderProcessed(video, this.exportScale);
       const contrastPixels = this.pipeline.getContrastPixels();
       const basePalette = PALETTES[this.currentSettings.palette];
       const palette: Palette = this.currentSettings.invertPalette
@@ -105,23 +118,38 @@ export class VideoProcessor {
         this.processHeight,
         palette
       );
-      this.pipeline.renderExportFromPixels(floydPixels, this.currentSettings.lcd.enabled);
+      this.pipeline.renderExportFromPixels(
+        floydPixels,
+        this.currentSettings.lcd.enabled,
+        this.exportScale
+      );
       pixels = this.pipeline.getProcessedPixels();
     } else {
-      this.pipeline.renderProcessed(video);
+      this.pipeline.renderProcessed(video, this.exportScale);
       pixels = this.pipeline.getProcessedPixels();
     }
 
+    const outputDims = this.pipeline.getOutputDimensions();
+    const preScaled = this.exportScale > 1;
+
     return {
       pixels,
-      width: this.processWidth,
-      height: this.processHeight,
+      width: outputDims.width,
+      height: outputDims.height,
       timestamp: video.currentTime,
+      preScaled,
     };
   }
 
   getProcessingDimensions(): { width: number; height: number } {
     return { width: this.processWidth, height: this.processHeight };
+  }
+
+  getExportFrameDimensions(): { width: number; height: number } {
+    return {
+      width: this.processWidth * this.exportScale,
+      height: this.processHeight * this.exportScale,
+    };
   }
 
   /**

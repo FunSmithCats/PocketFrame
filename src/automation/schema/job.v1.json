@@ -34,7 +34,18 @@
         "contrast": { "type": "number" },
         "ditherMode": {
           "type": "string",
-          "enum": ["none", "bayer2x2", "bayer4x4", "floydSteinberg"]
+          "enum": ["none", "bayer2x2", "bayer4x4", "floydSteinberg", "gameBoyCamera"]
+        },
+        "cameraResponse": { "type": "number" },
+        "crop": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "width": { "type": "number" },
+            "height": { "type": "number" }
+          }
         },
         "palette": {
           "type": "string",

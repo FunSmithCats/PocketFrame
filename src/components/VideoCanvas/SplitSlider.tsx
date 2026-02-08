@@ -1,46 +1,20 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from 'react';
-import { useAppStore, useSplitPosition, useVideoInfo } from '../../state/store';
+import { useAppStore, useDitherMode, useSplitPosition, useVideoInfo } from '../../state/store';
 import { SPLIT_SLIDER } from '../../constants/ui';
+import { calculatePreviewViewportCss } from '../../utils';
 
 interface SplitSliderProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
-}
-
-function calculateViewport(
-  containerWidth: number,
-  containerHeight: number,
-  sourceAspect: number
-) {
-  const containerAspect = containerWidth / containerHeight;
-
-  if (containerAspect > sourceAspect) {
-    // Pillarbox (black bars on sides)
-    const height = containerHeight;
-    const width = Math.round(height * sourceAspect);
-    const x = Math.round((containerWidth - width) / 2);
-    return { x, y: 0, width, height };
-  } else {
-    // Letterbox (black bars top/bottom)
-    const width = containerWidth;
-    const height = Math.round(width / sourceAspect);
-    const y = Math.round((containerHeight - height) / 2);
-    return { x: 0, y, width, height };
-  }
 }
 
 export function SplitSlider({ containerRef }: SplitSliderProps) {
   const splitPosition = useSplitPosition();
   const setSplitPosition = useAppStore((s) => s.setSplitPosition);
   const videoInfo = useVideoInfo();
+  const ditherMode = useDitherMode();
   const [isDragging, setIsDragging] = useState(false);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const sliderRef = useRef<HTMLDivElement>(null);
-
-  // Calculate source video aspect ratio (default to 16:9 if no video)
-  const sourceAspect = useMemo(() => {
-    if (!videoInfo) return 16 / 9;
-    return videoInfo.width / videoInfo.height;
-  }, [videoInfo]);
 
   // Track container size for viewport calculation
   useEffect(() => {
@@ -60,10 +34,29 @@ export function SplitSlider({ containerRef }: SplitSliderProps) {
     return () => resizeObserver.disconnect();
   }, [containerRef]);
 
-  const viewport = useMemo(
-    () => calculateViewport(containerSize.width, containerSize.height, sourceAspect),
-    [containerSize.width, containerSize.height, sourceAspect]
-  );
+  const viewport = useMemo(() => {
+    if (containerSize.width <= 0 || containerSize.height <= 0) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+
+    if (!videoInfo) {
+      return {
+        x: 0,
+        y: 0,
+        width: containerSize.width,
+        height: containerSize.height,
+      };
+    }
+
+    return calculatePreviewViewportCss(
+      containerSize.width,
+      containerSize.height,
+      videoInfo.width,
+      videoInfo.height,
+      ditherMode,
+      window.devicePixelRatio || 1
+    );
+  }, [containerSize.width, containerSize.height, videoInfo, ditherMode]);
 
   // Clamp position to valid range
   const clampPosition = useCallback((value: number) => {

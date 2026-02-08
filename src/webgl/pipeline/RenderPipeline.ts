@@ -1,4 +1,4 @@
-import type { DitherMode } from '../../state/store';
+import type { CropRegionNormalized, DitherMode } from '../../state/store';
 import type { PaletteName } from '../../palettes';
 import { getPaletteAsFloat } from '../../palettes';
 import {
@@ -15,6 +15,7 @@ import { downsampleFragmentShader } from '../shaders/downsample.frag';
 import { contrastFragmentShader } from '../shaders/contrast.frag';
 import { bayer2x2FragmentShader } from '../shaders/dither/bayer2x2.frag';
 import { bayer4x4FragmentShader } from '../shaders/dither/bayer4x4.frag';
+import { gameBoyCamera4x4FragmentShader } from '../shaders/dither/gameBoyCamera4x4.frag';
 import { noDitherFragmentShader } from '../shaders/dither/noDither.frag';
 import { upscaleFragmentShader } from '../shaders/upscale.frag';
 import { splitFragmentShader } from '../shaders/split.frag';
@@ -56,6 +57,7 @@ export class RenderPipeline {
   private noDitherProgram!: WebGLProgram;
   private bayer2x2Program!: WebGLProgram;
   private bayer4x4Program!: WebGLProgram;
+  private gameBoyCameraProgram!: WebGLProgram;
 
   // Split compositor
   private splitProgram!: WebGLProgram;
@@ -83,6 +85,9 @@ export class RenderPipeline {
   private currentPalette: PaletteName = '1989Green';
   private currentInvertPalette = false;
   private currentContrast = 1.0;
+  private currentCameraResponse = 0.8;
+  private currentCropRegion: CropRegionNormalized = { x: 0, y: 0, width: 1, height: 1 };
+  private currentDitherMode: DitherMode = 'bayer4x4';
 
   // LCD effect settings
   private gridIntensity = 0.7;
@@ -97,6 +102,10 @@ export class RenderPipeline {
   private cpuInputTexture!: WebGLTexture;
   private cpuInputFramebuffer!: WebGLFramebuffer;
   private lastExportFramebuffer!: WebGLFramebuffer;
+  private exportPassWidth = this.processWidth;
+  private exportPassHeight = this.processHeight;
+  private lastOutputWidth = this.processWidth;
+  private lastOutputHeight = this.processHeight;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
@@ -115,6 +124,7 @@ export class RenderPipeline {
     const noDitherFS = createShader(gl, gl.FRAGMENT_SHADER, noDitherFragmentShader);
     const bayer2x2FS = createShader(gl, gl.FRAGMENT_SHADER, bayer2x2FragmentShader);
     const bayer4x4FS = createShader(gl, gl.FRAGMENT_SHADER, bayer4x4FragmentShader);
+    const gameBoyCameraFS = createShader(gl, gl.FRAGMENT_SHADER, gameBoyCamera4x4FragmentShader);
     const upscaleFS = createShader(gl, gl.FRAGMENT_SHADER, upscaleFragmentShader);
     const splitFS = createShader(gl, gl.FRAGMENT_SHADER, splitFragmentShader);
     const passthroughFS = createShader(gl, gl.FRAGMENT_SHADER, passthroughFragmentShader);
@@ -122,7 +132,7 @@ export class RenderPipeline {
     // Store all fragment shaders for cleanup
     this.fragmentShaders = [
       downsampleFS, contrastFS, noDitherFS, bayer2x2FS,
-      bayer4x4FS, upscaleFS, splitFS, passthroughFS
+      bayer4x4FS, gameBoyCameraFS, upscaleFS, splitFS, passthroughFS
     ];
 
     // Create programs
@@ -131,6 +141,7 @@ export class RenderPipeline {
     this.noDitherProgram = createProgram(gl, this.vertexShader, noDitherFS);
     this.bayer2x2Program = createProgram(gl, this.vertexShader, bayer2x2FS);
     this.bayer4x4Program = createProgram(gl, this.vertexShader, bayer4x4FS);
+    this.gameBoyCameraProgram = createProgram(gl, this.vertexShader, gameBoyCameraFS);
     const upscaleProgram = createProgram(gl, this.vertexShader, upscaleFS);
     this.splitProgram = createProgram(gl, this.vertexShader, splitFS);
     this.passthroughProgram = createProgram(gl, this.vertexShader, passthroughFS);
@@ -182,6 +193,8 @@ export class RenderPipeline {
       texture: exportTex,
       framebuffer: exportFB,
     };
+    this.exportPassWidth = this.processWidth;
+    this.exportPassHeight = this.processHeight;
 
     // Previous frame texture for ghosting effect (same size as dither output)
     this.previousFrameTexture = createTexture(gl, this.processWidth, this.processHeight);
@@ -228,34 +241,45 @@ export class RenderPipeline {
     const exportFB = createFramebuffer(gl, exportTex);
     this.exportPass.texture = exportTex;
     this.exportPass.framebuffer = exportFB;
+    this.exportPassWidth = this.processWidth;
+    this.exportPassHeight = this.processHeight;
 
     this.previousFrameTexture = createTexture(gl, this.processWidth, this.processHeight);
     this.previousFrameFramebuffer = createFramebuffer(gl, this.previousFrameTexture);
     this.cpuInputTexture = createTexture(gl, this.processWidth, this.processHeight);
     this.cpuInputFramebuffer = createFramebuffer(gl, this.cpuInputTexture);
     this.lastExportFramebuffer = this.ditherPass.framebuffer;
+    this.lastOutputWidth = this.processWidth;
+    this.lastOutputHeight = this.processHeight;
   }
 
-  setSourceVideoInfo(width: number, height: number): void {
-    const aspectRatio = width / height;
-    this.sourceVideoInfo = { width, height, aspectRatio };
+  private ensureExportPassSize(width: number, height: number): void {
+    if (this.exportPassWidth === width && this.exportPassHeight === height) {
+      return;
+    }
 
-    // Calculate dynamic processing resolution based on source aspect ratio
-    const { width: procWidth, height: procHeight } = calculateProcessingResolution(width, height);
-    this.processWidth = procWidth;
-    this.processHeight = procHeight;
+    const gl = this.gl;
+    gl.deleteTexture(this.exportPass.texture);
+    gl.deleteFramebuffer(this.exportPass.framebuffer);
 
-    // Recreate all processing textures with new resolution
-    this.recreateProcessingTextures();
+    this.exportPass.texture = createTexture(gl, width, height);
+    this.exportPass.framebuffer = createFramebuffer(gl, this.exportPass.texture);
+    this.exportPassWidth = width;
+    this.exportPassHeight = height;
+  }
 
-    // Recalculate viewport with new aspect ratio
-    this.viewport = calculateLetterboxViewport(this.displayWidth, this.displayHeight, aspectRatio, {
-      sourceWidth: this.processWidth,
-      sourceHeight: this.processHeight,
-      snapToIntegerScale: true,
-    });
+  private refreshViewportAndUpscaleTexture(): void {
+    this.viewport = calculateLetterboxViewport(
+      this.displayWidth,
+      this.displayHeight,
+      this.processWidth / this.processHeight,
+      {
+        sourceWidth: this.processWidth,
+        sourceHeight: this.processHeight,
+        snapToIntegerScale: true,
+      }
+    );
 
-    // Recreate upscale texture with new viewport size
     const gl = this.gl;
     gl.deleteTexture(this.upscalePass.texture);
     gl.deleteFramebuffer(this.upscalePass.framebuffer);
@@ -264,6 +288,29 @@ export class RenderPipeline {
     const newFB = createFramebuffer(gl, newTex);
     this.upscalePass.texture = newTex;
     this.upscalePass.framebuffer = newFB;
+  }
+
+  private updateProcessingResolutionForMode(): void {
+    const { width: procWidth, height: procHeight } = calculateProcessingResolution(
+      this.sourceVideoInfo.width,
+      this.sourceVideoInfo.height,
+      this.currentDitherMode
+    );
+    const dimensionsChanged = this.processWidth !== procWidth || this.processHeight !== procHeight;
+    this.processWidth = procWidth;
+    this.processHeight = procHeight;
+
+    if (dimensionsChanged) {
+      this.recreateProcessingTextures();
+    }
+
+    this.refreshViewportAndUpscaleTexture();
+  }
+
+  setSourceVideoInfo(width: number, height: number): void {
+    const aspectRatio = width / height;
+    this.sourceVideoInfo = { width, height, aspectRatio };
+    this.updateProcessingResolutionForMode();
   }
 
   getSourceVideoInfo(): SourceVideoInfo {
@@ -273,21 +320,7 @@ export class RenderPipeline {
   setDisplaySize(width: number, height: number): void {
     this.displayWidth = width;
     this.displayHeight = height;
-    this.viewport = calculateLetterboxViewport(width, height, this.sourceVideoInfo.aspectRatio, {
-      sourceWidth: this.processWidth,
-      sourceHeight: this.processHeight,
-      snapToIntegerScale: true,
-    });
-
-    // Recreate upscale texture with viewport size (not container size)
-    const gl = this.gl;
-    gl.deleteTexture(this.upscalePass.texture);
-    gl.deleteFramebuffer(this.upscalePass.framebuffer);
-
-    const newTex = createTexture(gl, this.viewport.width, this.viewport.height);
-    const newFB = createFramebuffer(gl, newTex);
-    this.upscalePass.texture = newTex;
-    this.upscalePass.framebuffer = newFB;
+    this.refreshViewportAndUpscaleTexture();
   }
 
   getViewport(): Viewport {
@@ -298,7 +331,28 @@ export class RenderPipeline {
     this.currentContrast = value;
   }
 
+  setCameraResponse(value: number): void {
+    this.currentCameraResponse = Math.max(0, Math.min(value, 1));
+  }
+
+  setCropRegion(region: CropRegionNormalized): void {
+    this.currentCropRegion = {
+      x: Math.max(0, Math.min(region.x, 1)),
+      y: Math.max(0, Math.min(region.y, 1)),
+      width: Math.max(0, Math.min(region.width, 1)),
+      height: Math.max(0, Math.min(region.height, 1)),
+    };
+  }
+
   setDitherMode(mode: DitherMode): void {
+    const wasGameBoyCamera = this.currentDitherMode === 'gameBoyCamera';
+    const isGameBoyCamera = mode === 'gameBoyCamera';
+    this.currentDitherMode = mode;
+
+    if (wasGameBoyCamera !== isGameBoyCamera) {
+      this.updateProcessingResolutionForMode();
+    }
+
     switch (mode) {
       case 'none':
         this.ditherPass.program = this.noDitherProgram;
@@ -312,6 +366,9 @@ export class RenderPipeline {
       case 'floydSteinberg':
         // For preview, fall back to bayer4x4 (CPU implementation for export)
         this.ditherPass.program = this.bayer4x4Program;
+        break;
+      case 'gameBoyCamera':
+        this.ditherPass.program = this.gameBoyCameraProgram;
         break;
     }
   }
@@ -396,7 +453,8 @@ export class RenderPipeline {
     sourceWidth: number,
     sourceHeight: number,
     targetWidth: number,
-    targetHeight: number
+    targetHeight: number,
+    effectsEnabled: boolean = this.lcdEffectsEnabled
   ): void {
     const sourceLoc = gl.getUniformLocation(program, 'u_sourceResolution');
     const targetLoc = gl.getUniformLocation(program, 'u_targetResolution');
@@ -413,10 +471,10 @@ export class RenderPipeline {
     const ghostLoc = gl.getUniformLocation(program, 'u_ghostingStrength');
     const baselineLoc = gl.getUniformLocation(program, 'u_baselineAlpha');
 
-    const gridIntensity = this.lcdEffectsEnabled ? this.gridIntensity : 0;
-    const shadowOpacity = this.lcdEffectsEnabled ? this.shadowOpacity : 0;
-    const ghostingStrength = this.lcdEffectsEnabled ? this.ghostingStrength : 0;
-    const baselineAlpha = this.lcdEffectsEnabled ? this.baselineAlpha : 0;
+    const gridIntensity = effectsEnabled ? this.gridIntensity : 0;
+    const shadowOpacity = effectsEnabled ? this.shadowOpacity : 0;
+    const ghostingStrength = effectsEnabled ? this.ghostingStrength : 0;
+    const baselineAlpha = effectsEnabled ? this.baselineAlpha : 0;
 
     if (gridLoc) gl.uniform1f(gridLoc, gridIntensity);
     if (shadowLoc) gl.uniform1f(shadowLoc, shadowOpacity);
@@ -439,8 +497,14 @@ export class RenderPipeline {
       (gl, program) => {
         const targetResLoc = gl.getUniformLocation(program, 'u_targetResolution');
         const sourceResLoc = gl.getUniformLocation(program, 'u_sourceResolution');
-        if (targetResLoc) gl.uniform2f(targetResLoc, this.processWidth, this.processHeight);
-        if (sourceResLoc) gl.uniform2f(sourceResLoc, videoWidth, videoHeight);
+        const cropOriginLoc = gl.getUniformLocation(program, 'u_cropOrigin');
+        const cropSizeLoc = gl.getUniformLocation(program, 'u_cropSize');
+        const useCustomCropLoc = gl.getUniformLocation(program, 'u_useCustomCrop');
+        if (targetResLoc !== null) gl.uniform2f(targetResLoc, this.processWidth, this.processHeight);
+        if (sourceResLoc !== null) gl.uniform2f(sourceResLoc, videoWidth, videoHeight);
+        if (cropOriginLoc !== null) gl.uniform2f(cropOriginLoc, this.currentCropRegion.x, this.currentCropRegion.y);
+        if (cropSizeLoc !== null) gl.uniform2f(cropSizeLoc, this.currentCropRegion.width, this.currentCropRegion.height);
+        if (useCustomCropLoc !== null) gl.uniform1f(useCustomCropLoc, this.currentDitherMode === 'gameBoyCamera' ? 1.0 : 0.0);
       }
     );
 
@@ -452,7 +516,11 @@ export class RenderPipeline {
       this.processHeight,
       (gl, program) => {
         const contrastLoc = gl.getUniformLocation(program, 'u_contrast');
+        const cameraModeLoc = gl.getUniformLocation(program, 'u_cameraMode');
+        const cameraResponseLoc = gl.getUniformLocation(program, 'u_cameraResponse');
         if (contrastLoc) gl.uniform1f(contrastLoc, this.currentContrast);
+        if (cameraModeLoc) gl.uniform1f(cameraModeLoc, this.currentDitherMode === 'gameBoyCamera' ? 1.0 : 0.0);
+        if (cameraResponseLoc) gl.uniform1f(cameraResponseLoc, this.currentCameraResponse);
       }
     );
 
@@ -481,6 +549,15 @@ export class RenderPipeline {
     const videoWidth = video.videoWidth || 1;
     const videoHeight = video.videoHeight || 1;
     const aspectRatio = videoWidth / videoHeight;
+    const useOriginalCrop = this.currentDitherMode === 'gameBoyCamera';
+    const cropWidthNorm = Math.max(this.currentCropRegion.width, 0);
+    const cropHeightNorm = Math.max(this.currentCropRegion.height, 0);
+    const croppedWidth = videoWidth * cropWidthNorm;
+    const croppedHeight = videoHeight * cropHeightNorm;
+    const croppedAspect = croppedWidth / Math.max(croppedHeight, 1e-6);
+    const originalAspect = useOriginalCrop && Number.isFinite(croppedAspect) && croppedAspect > 0
+      ? croppedAspect
+      : aspectRatio;
 
     // Clamp split position to valid range
     const clampedSplit = Math.max(0.0, Math.min(1.0, splitPosition));
@@ -539,78 +616,109 @@ export class RenderPipeline {
     const resLoc = gl.getUniformLocation(this.splitProgram, 'u_resolution');
     const sourceAspectLoc = gl.getUniformLocation(this.splitProgram, 'u_sourceAspectRatio');
     const viewportAspectLoc = gl.getUniformLocation(this.splitProgram, 'u_viewportAspectRatio');
+    const useOriginalCropLoc = gl.getUniformLocation(this.splitProgram, 'u_useOriginalCrop');
+    const originalCropOriginLoc = gl.getUniformLocation(this.splitProgram, 'u_originalCropOrigin');
+    const originalCropSizeLoc = gl.getUniformLocation(this.splitProgram, 'u_originalCropSize');
 
-    if (origLoc) gl.uniform1i(origLoc, 0);
-    if (procLoc) gl.uniform1i(procLoc, 1);
-    if (splitLoc) gl.uniform1f(splitLoc, clampedSplit);
-    if (resLoc) gl.uniform2f(resLoc, this.viewport.width, this.viewport.height);
-    if (sourceAspectLoc) gl.uniform1f(sourceAspectLoc, aspectRatio);
-    if (viewportAspectLoc) gl.uniform1f(viewportAspectLoc, this.viewport.width / this.viewport.height);
+    if (origLoc !== null) gl.uniform1i(origLoc, 0);
+    if (procLoc !== null) gl.uniform1i(procLoc, 1);
+    if (splitLoc !== null) gl.uniform1f(splitLoc, clampedSplit);
+    if (resLoc !== null) gl.uniform2f(resLoc, this.viewport.width, this.viewport.height);
+    if (sourceAspectLoc !== null) gl.uniform1f(sourceAspectLoc, originalAspect);
+    if (viewportAspectLoc !== null) gl.uniform1f(viewportAspectLoc, this.viewport.width / this.viewport.height);
+    if (useOriginalCropLoc !== null) gl.uniform1f(useOriginalCropLoc, useOriginalCrop ? 1.0 : 0.0);
+    if (originalCropOriginLoc !== null) {
+      gl.uniform2f(originalCropOriginLoc, this.currentCropRegion.x, this.currentCropRegion.y);
+    }
+    if (originalCropSizeLoc !== null) {
+      gl.uniform2f(originalCropSizeLoc, this.currentCropRegion.width, this.currentCropRegion.height);
+    }
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
   // Render without split (for export)
-  renderProcessed(video: HTMLVideoElement): void {
+  renderProcessed(video: HTMLVideoElement, exportScale: number = 1): void {
     this.runSharedBasePasses(video);
 
-    if (this.lcdEffectsEnabled) {
-      this.renderPass(
-        this.exportPass.program,
-        this.ditherPass.texture,
-        this.exportPass.framebuffer,
+    const safeScale = Math.max(1, Math.round(exportScale));
+    const targetWidth = this.processWidth * safeScale;
+    const targetHeight = this.processHeight * safeScale;
+    this.ensureExportPassSize(targetWidth, targetHeight);
+
+    this.renderPass(
+      this.exportPass.program,
+      this.ditherPass.texture,
+      this.exportPass.framebuffer,
+      targetWidth,
+      targetHeight,
+      (gl, program) => this.applyLcdUniforms(
+        gl,
+        program,
         this.processWidth,
         this.processHeight,
-        (gl, program) => this.applyLcdUniforms(
-          gl,
-          program,
-          this.processWidth,
-          this.processHeight,
-          this.processWidth,
-          this.processHeight
-        )
-      );
-      this.lastExportFramebuffer = this.exportPass.framebuffer;
-    } else {
-      this.lastExportFramebuffer = this.ditherPass.framebuffer;
-    }
+        targetWidth,
+        targetHeight
+      )
+    );
+    this.lastExportFramebuffer = this.exportPass.framebuffer;
+    this.lastOutputWidth = targetWidth;
+    this.lastOutputHeight = targetHeight;
 
     this.copyTexture(this.ditherPass.texture, this.previousFrameFramebuffer, this.processWidth, this.processHeight);
   }
 
-  renderExportFromPixels(pixels: Uint8Array, applyLcdEffects: boolean = this.lcdEffectsEnabled): void {
+  renderExportFromPixels(
+    pixels: Uint8Array,
+    applyLcdEffects: boolean = this.lcdEffectsEnabled,
+    exportScale: number = 1
+  ): void {
     this.uploadPixelsToCpuTexture(pixels);
 
-    if (applyLcdEffects) {
-      this.renderPass(
-        this.exportPass.program,
-        this.cpuInputTexture,
-        this.exportPass.framebuffer,
+    const safeScale = Math.max(1, Math.round(exportScale));
+    const targetWidth = this.processWidth * safeScale;
+    const targetHeight = this.processHeight * safeScale;
+    this.ensureExportPassSize(targetWidth, targetHeight);
+
+    this.renderPass(
+      this.exportPass.program,
+      this.cpuInputTexture,
+      this.exportPass.framebuffer,
+      targetWidth,
+      targetHeight,
+      (gl, program) => this.applyLcdUniforms(
+        gl,
+        program,
         this.processWidth,
         this.processHeight,
-        (gl, program) => this.applyLcdUniforms(
-          gl,
-          program,
-          this.processWidth,
-          this.processHeight,
-          this.processWidth,
-          this.processHeight
-        )
-      );
-      this.lastExportFramebuffer = this.exportPass.framebuffer;
-    } else {
-      this.lastExportFramebuffer = this.cpuInputFramebuffer;
-    }
+        targetWidth,
+        targetHeight,
+        applyLcdEffects
+      )
+    );
+    this.lastExportFramebuffer = this.exportPass.framebuffer;
+    this.lastOutputWidth = targetWidth;
+    this.lastOutputHeight = targetHeight;
 
     this.copyTexture(this.cpuInputTexture, this.previousFrameFramebuffer, this.processWidth, this.processHeight);
   }
 
   getContrastPixels(): Uint8Array {
-    return this.readPixelsFromFramebuffer(this.contrastPass.framebuffer);
+    return this.readPixelsFromFramebuffer(
+      this.contrastPass.framebuffer,
+      this.processWidth,
+      this.processHeight,
+      true
+    );
   }
 
   getProcessedPixels(): Uint8Array {
-    return this.readPixelsFromFramebuffer(this.lastExportFramebuffer);
+    return this.readPixelsFromFramebuffer(
+      this.lastExportFramebuffer,
+      this.lastOutputWidth,
+      this.lastOutputHeight,
+      false
+    );
   }
 
   private uploadPixelsToCpuTexture(pixels: Uint8Array): void {
@@ -630,25 +738,32 @@ export class RenderPipeline {
     );
   }
 
-  private readPixelsFromFramebuffer(framebuffer: WebGLFramebuffer): Uint8Array {
+  private readPixelsFromFramebuffer(
+    framebuffer: WebGLFramebuffer,
+    width: number,
+    height: number,
+    flipRows: boolean = true
+  ): Uint8Array {
     const gl = this.gl;
-    const pixels = new Uint8Array(this.processWidth * this.processHeight * 4);
+    const pixels = new Uint8Array(width * height * 4);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    gl.readPixels(0, 0, this.processWidth, this.processHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-    // Flip pixels from bottom-to-top (WebGL) to top-to-bottom (standard image format)
-    const rowBytes = this.processWidth * 4;
-    const halfHeight = Math.floor(this.processHeight / 2);
-    const tempRow = new Uint8Array(rowBytes);
-    for (let y = 0; y < halfHeight; y++) {
-      const topOffset = y * rowBytes;
-      const bottomOffset = (this.processHeight - 1 - y) * rowBytes;
-      // Swap rows
-      tempRow.set(pixels.subarray(topOffset, topOffset + rowBytes));
-      pixels.set(pixels.subarray(bottomOffset, bottomOffset + rowBytes), topOffset);
-      pixels.set(tempRow, bottomOffset);
+    if (flipRows) {
+      // Flip pixels from bottom-to-top (WebGL) to top-to-bottom (standard image format)
+      const rowBytes = width * 4;
+      const halfHeight = Math.floor(height / 2);
+      const tempRow = new Uint8Array(rowBytes);
+      for (let y = 0; y < halfHeight; y++) {
+        const topOffset = y * rowBytes;
+        const bottomOffset = (height - 1 - y) * rowBytes;
+        // Swap rows
+        tempRow.set(pixels.subarray(topOffset, topOffset + rowBytes));
+        pixels.set(pixels.subarray(bottomOffset, bottomOffset + rowBytes), topOffset);
+        pixels.set(tempRow, bottomOffset);
+      }
     }
 
     return pixels;
@@ -656,6 +771,10 @@ export class RenderPipeline {
 
   getProcessingDimensions(): { width: number; height: number } {
     return { width: this.processWidth, height: this.processHeight };
+  }
+
+  getOutputDimensions(): { width: number; height: number } {
+    return { width: this.lastOutputWidth, height: this.lastOutputHeight };
   }
 
   dispose(): void {
@@ -690,6 +809,7 @@ export class RenderPipeline {
     gl.deleteProgram(this.noDitherProgram);
     gl.deleteProgram(this.bayer2x2Program);
     gl.deleteProgram(this.bayer4x4Program);
+    gl.deleteProgram(this.gameBoyCameraProgram);
     gl.deleteProgram(this.splitProgram);
     gl.deleteProgram(this.passthroughProgram);
   }

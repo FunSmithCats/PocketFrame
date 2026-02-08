@@ -3,7 +3,7 @@
  * Centralizes all processing and output resolution logic
  */
 
-import { BASE_PIXEL_DENSITY, EXPORT_SCALE } from '../constants';
+import { BASE_PIXEL_DENSITY, EXPORT_SCALE, GBCAM_SENSOR_HEIGHT, GBCAM_SENSOR_WIDTH } from '../constants';
 import type { ExportFormat } from '../state/store';
 
 export interface Dimensions {
@@ -17,8 +17,13 @@ export interface Dimensions {
  */
 export function calculateProcessingResolution(
   sourceWidth: number,
-  sourceHeight: number
+  sourceHeight: number,
+  ditherMode?: string
 ): Dimensions {
+  if (ditherMode === 'gameBoyCamera') {
+    return { width: GBCAM_SENSOR_WIDTH, height: GBCAM_SENSOR_HEIGHT };
+  }
+
   const aspectRatio = sourceWidth / sourceHeight;
 
   if (aspectRatio >= 1) {
@@ -41,10 +46,11 @@ export function calculateProcessingResolution(
 export function calculateOutputDimensions(
   sourceWidth: number,
   sourceHeight: number,
-  format: ExportFormat
+  format: ExportFormat,
+  ditherMode?: string
 ): Dimensions {
   // First get the processing resolution
-  const proc = calculateProcessingResolution(sourceWidth, sourceHeight);
+  const proc = calculateProcessingResolution(sourceWidth, sourceHeight, ditherMode);
 
   // Different scale factors for different formats
   const scale = format === 'gif' ? EXPORT_SCALE.GIF : EXPORT_SCALE.HIGH_QUALITY;

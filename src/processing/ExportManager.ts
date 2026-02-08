@@ -4,6 +4,7 @@ import { WebCodecsEncoder, isWebCodecsSupported } from './encoders/WebCodecsEnco
 import { encodeGif } from './encoders/GifEncoder';
 import { encodePngSequence } from './encoders/PngEncoder';
 import type { ExportFormat } from '../state/store';
+import { EXPORT_SCALE } from '../constants';
 
 function isMacEnvironment(): boolean {
   if (typeof navigator === 'undefined') {
@@ -55,6 +56,8 @@ export async function exportVideo(
   const processor = getVideoProcessor();
 
   processor.setSettings(settings);
+  const exportScale = format === 'mp4' ? EXPORT_SCALE.HIGH_QUALITY : 1;
+  processor.setExportScale(exportScale);
 
   // Get source dimensions from video element if not provided
   const sourceDims = sourceVideoDimensions || {
@@ -84,7 +87,7 @@ export async function exportVideo(
         const needsAudio = !!videoElement.src;
 
         processor.setSourceVideoDimensions(videoElement.videoWidth, videoElement.videoHeight);
-        const processingDims = processor.getProcessingDimensions();
+        const processingDims = processor.getExportFrameDimensions();
         const encoder = new WebCodecsEncoder({
           fps,
           frameWidth: processingDims.width,

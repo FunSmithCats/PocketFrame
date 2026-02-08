@@ -3,6 +3,8 @@
  * Handles letterbox/pillarbox layout for video display
  */
 
+import { calculateProcessingResolution } from './resolution';
+
 export interface Viewport {
   x: number;
   y: number;
@@ -70,4 +72,50 @@ export function calculateLetterboxViewport(
   }
 
   return { x, y, width, height };
+}
+
+/**
+ * Calculate preview viewport in CSS pixels using the same model as WebGL rendering:
+ * processing-resolution aspect ratio + integer scale snapping + DPR-aware sizing.
+ */
+export function calculatePreviewViewportCss(
+  containerWidth: number,
+  containerHeight: number,
+  sourceWidth: number,
+  sourceHeight: number,
+  ditherMode?: string,
+  dpr: number = 1
+): Viewport {
+  if (containerWidth <= 0 || containerHeight <= 0) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+
+  if (sourceWidth <= 0 || sourceHeight <= 0) {
+    return { x: 0, y: 0, width: containerWidth, height: containerHeight };
+  }
+
+  const safeDpr = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+  const { width: processWidth, height: processHeight } = calculateProcessingResolution(
+    sourceWidth,
+    sourceHeight,
+    ditherMode
+  );
+
+  const deviceViewport = calculateLetterboxViewport(
+    containerWidth * safeDpr,
+    containerHeight * safeDpr,
+    processWidth / processHeight,
+    {
+      sourceWidth: processWidth,
+      sourceHeight: processHeight,
+      snapToIntegerScale: true,
+    }
+  );
+
+  return {
+    x: deviceViewport.x / safeDpr,
+    y: deviceViewport.y / safeDpr,
+    width: deviceViewport.width / safeDpr,
+    height: deviceViewport.height / safeDpr,
+  };
 }

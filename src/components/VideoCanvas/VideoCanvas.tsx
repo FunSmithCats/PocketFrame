@@ -1,9 +1,11 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import {
   useAppStore,
+  useCropRegion,
   useVideoInfo,
   useSplitPosition,
   useContrast,
+  useCameraResponse,
   useDitherMode,
   usePalette,
   useInvertPalette,
@@ -22,6 +24,7 @@ import {
 } from '../../state/store';
 import { RenderPipeline } from '../../webgl/pipeline/RenderPipeline';
 import { SplitSlider } from './SplitSlider';
+import { CropSelectorOverlay } from './CropSelectorOverlay';
 import { GameBoyAudioProcessor } from '../../audio/GameBoyAudioProcessor';
 
 interface ImportRequest {
@@ -46,15 +49,19 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
   const targetFpsRef = useRef<number>(15);
   const splitPositionRef = useRef<number>(0.5);
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumePlaybackAfterCropRef = useRef(false);
 
   // Error and loading states
   const [webglError, setWebglError] = useState<string | null>(null);
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [isCropEditing, setIsCropEditing] = useState(false);
 
   const videoInfo = useVideoInfo();
+  const cropRegion = useCropRegion();
   const splitPosition = useSplitPosition();
   const contrast = useContrast();
+  const cameraResponse = useCameraResponse();
   const ditherMode = useDitherMode();
   const palette = usePalette();
   const invertPalette = useInvertPalette();
@@ -82,6 +89,8 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
 
   const setVideoInfo = useAppStore((s) => s.setVideoInfo);
   const setVideoElement = useAppStore((s) => s.setVideoElement);
+  const setCropRegion = useAppStore((s) => s.setCropRegion);
+  const resetCropRegionForSource = useAppStore((s) => s.resetCropRegionForSource);
   const isPlaying = useAppStore((s) => s.isPlaying);
   const setIsPlaying = useAppStore((s) => s.setIsPlaying);
   const setCurrentTime = useAppStore((s) => s.setCurrentTime);
@@ -133,6 +142,8 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
         // Re-apply current settings from store
         const state = useAppStore.getState();
         pipelineRef.current?.setContrast(state.contrast);
+        pipelineRef.current?.setCameraResponse(state.cameraResponse);
+        pipelineRef.current?.setCropRegion(state.cropRegion);
         pipelineRef.current?.setDitherMode(state.ditherMode);
         pipelineRef.current?.setPalette(state.palette);
         pipelineRef.current?.setInvertPalette(state.invertPalette);
@@ -166,6 +177,14 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
   useEffect(() => {
     pipelineRef.current?.setContrast(contrast);
   }, [contrast]);
+
+  useEffect(() => {
+    pipelineRef.current?.setCameraResponse(cameraResponse);
+  }, [cameraResponse]);
+
+  useEffect(() => {
+    pipelineRef.current?.setCropRegion(cropRegion);
+  }, [cropRegion]);
 
   useEffect(() => {
     pipelineRef.current?.setDitherMode(ditherMode);
@@ -409,6 +428,8 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
         pipelineRef.current.setSourceVideoInfo(video.videoWidth, video.videoHeight);
       }
 
+      resetCropRegionForSource(video.videoWidth, video.videoHeight);
+
       setVideoInfo({
         src,
         name,
@@ -424,7 +445,7 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
     video.onerror = () => {
       setIsVideoLoading(false);
     };
-  }, [setVideoInfo]);
+  }, [setVideoInfo, resetCropRegionForSource]);
 
   // Handle import requests from the main UI.
   useEffect(() => {
@@ -460,15 +481,61 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
     }
   }, [videoInfo]);
 
+  const enterCropEditMode = useCallback(() => {
+    const video = videoRef.current;
+    if (video && !video.paused) {
+      resumePlaybackAfterCropRef.current = true;
+      video.pause();
+    } else {
+      resumePlaybackAfterCropRef.current = false;
+    }
+    setIsCropEditing(true);
+  }, []);
+
+  const exitCropEditMode = useCallback(() => {
+    setIsCropEditing(false);
+    const video = videoRef.current;
+    const shouldResume = resumePlaybackAfterCropRef.current;
+    resumePlaybackAfterCropRef.current = false;
+    if (shouldResume && video?.paused) {
+      video.play().catch(console.error);
+    }
+  }, []);
+
+  const toggleCropEditMode = useCallback(() => {
+    if (isCropEditing) {
+      exitCropEditMode();
+    } else {
+      enterCropEditMode();
+    }
+  }, [enterCropEditMode, exitCropEditMode, isCropEditing]);
+
+  useEffect(() => {
+    if (ditherMode !== 'gameBoyCamera' && isCropEditing) {
+      exitCropEditMode();
+    }
+  }, [ditherMode, isCropEditing, exitCropEditMode]);
+
   // Keyboard shortcut for play/pause
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Escape' && isCropEditing) {
+      e.preventDefault();
+      e.stopPropagation();
+      exitCropEditMode();
+      return;
+    }
+
+    if (isCropEditing) {
+      return;
+    }
+
     // Only handle spacebar when the canvas container is focused
     if (e.key === ' ' || e.key === 'Spacebar') {
       e.preventDefault();
       e.stopPropagation();
       togglePlay();
     }
-  }, [togglePlay]);
+  }, [togglePlay, isCropEditing, exitCropEditMode]);
 
   // Dismiss audio error
   const dismissAudioError = useCallback(() => {
@@ -487,7 +554,7 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
       {/* Video element with audio enabled */}
       <video
         ref={videoRef}
-        className="hidden"
+        className={isCropEditing ? 'absolute inset-0 w-full h-full object-contain z-10 pointer-events-none bg-black' : 'hidden'}
         playsInline
         crossOrigin="anonymous"
       />
@@ -496,7 +563,7 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full canvas-container"
-        onClick={togglePlay}
+        onClick={isCropEditing ? undefined : togglePlay}
         aria-hidden="true"
       />
 
@@ -547,11 +614,34 @@ export function VideoCanvas({ importRequest }: VideoCanvasProps) {
         </div>
       )}
 
-      {/* Split slider (shown when video loaded) */}
-      {videoInfo && !webglError && <SplitSlider containerRef={containerRef} />}
+      {/* Crop mode toggle (only for Game Boy Camera mode) */}
+      {videoInfo && ditherMode === 'gameBoyCamera' && !webglError && (
+        <div className="absolute top-3 right-3 z-30">
+          <button
+            onClick={toggleCropEditMode}
+            className={isCropEditing ? 'btn-primary text-xs px-3 py-1.5' : 'btn-secondary text-xs px-3 py-1.5'}
+          >
+            {isCropEditing ? 'Done' : 'Crop'}
+          </button>
+        </div>
+      )}
+
+      {/* Crop selector overlay */}
+      {videoInfo && ditherMode === 'gameBoyCamera' && isCropEditing && !webglError && (
+        <CropSelectorOverlay
+          containerRef={containerRef}
+          sourceWidth={videoInfo.width}
+          sourceHeight={videoInfo.height}
+          cropRegion={cropRegion}
+          onChange={setCropRegion}
+        />
+      )}
+
+      {/* Split slider (shown when video loaded and not editing crop) */}
+      {videoInfo && !isCropEditing && !webglError && <SplitSlider containerRef={containerRef} />}
 
       {/* Play/Pause indicator */}
-      {videoInfo && !isPlaying && !webglError && (
+      {videoInfo && !isPlaying && !isCropEditing && !webglError && (
         <div
           className="absolute inset-0 flex items-center justify-center pointer-events-none"
           aria-hidden="true"

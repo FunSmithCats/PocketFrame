@@ -2,6 +2,7 @@ import { useCallback, useId } from 'react';
 import {
   useAppStore,
   useContrast,
+  useCameraResponse,
   useDitherMode,
   usePalette,
   useInvertPalette,
@@ -28,6 +29,7 @@ const DITHER_OPTIONS: { value: DitherMode; label: string }[] = [
   { value: 'bayer2x2', label: 'Bayer 2×2' },
   { value: 'bayer4x4', label: 'Bayer 4×4' },
   { value: 'floydSteinberg', label: 'Floyd-Steinberg' },
+  { value: 'gameBoyCamera', label: 'Game Boy Camera' },
 ];
 
 const PALETTE_LABELS: Record<PaletteName, string> = {
@@ -54,6 +56,7 @@ interface SidebarProps {
 export function Sidebar({ onImportClick, onExportClick }: SidebarProps) {
   const videoInfo = useVideoInfo();
   const contrast = useContrast();
+  const cameraResponse = useCameraResponse();
   const ditherMode = useDitherMode();
   const palette = usePalette();
   const invertPalette = useInvertPalette();
@@ -73,6 +76,7 @@ export function Sidebar({ onImportClick, onExportClick }: SidebarProps) {
   const enableLcdEffects = useEnableLcdEffects();
 
   const setContrast = useAppStore((s) => s.setContrast);
+  const setCameraResponse = useAppStore((s) => s.setCameraResponse);
   const setDitherMode = useAppStore((s) => s.setDitherMode);
   const setPalette = useAppStore((s) => s.setPalette);
   const setInvertPalette = useAppStore((s) => s.setInvertPalette);
@@ -126,6 +130,17 @@ export function Sidebar({ onImportClick, onExportClick }: SidebarProps) {
                   onChange={setContrast}
                   displayValue={contrast.toFixed(2)}
                 />
+                {ditherMode === 'gameBoyCamera' && (
+                  <SliderControl
+                    label="Camera Response"
+                    value={cameraResponse}
+                    min={SLIDERS.CAMERA_RESPONSE.MIN}
+                    max={SLIDERS.CAMERA_RESPONSE.MAX}
+                    step={SLIDERS.CAMERA_RESPONSE.STEP}
+                    onChange={setCameraResponse}
+                    displayValue={`${Math.round(cameraResponse * 100)}%`}
+                  />
+                )}
                 <SliderControl
                   label="Frame Rate"
                   value={targetFps}

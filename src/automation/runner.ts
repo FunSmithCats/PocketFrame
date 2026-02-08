@@ -30,8 +30,17 @@ function getFileNameFromPath(pathValue: string): string {
 }
 
 function getDimensions(job: ResolvedAutomationJob) {
-  const processing = calculateProcessingResolution(job.source.width, job.source.height);
-  const output = calculateOutputDimensions(job.source.width, job.source.height, 'mp4');
+  const processing = calculateProcessingResolution(
+    job.source.width,
+    job.source.height,
+    job.settings.processing.ditherMode
+  );
+  const output = calculateOutputDimensions(
+    job.source.width,
+    job.source.height,
+    'mp4',
+    job.settings.processing.ditherMode
+  );
 
   return {
     processing,
@@ -105,6 +114,8 @@ function toResolvedSettingsPayload(job: ResolvedAutomationJob) {
     targetFps: job.settings.targetFps,
     processing: {
       contrast: job.settings.processing.contrast,
+      cameraResponse: job.settings.processing.cameraResponse,
+      cropRegion: { ...job.settings.processing.cropRegion },
       ditherMode: job.settings.processing.ditherMode,
       palette: job.settings.processing.palette,
       invertPalette: job.settings.processing.invertPalette,

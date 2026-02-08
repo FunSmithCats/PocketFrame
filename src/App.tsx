@@ -23,6 +23,8 @@ function App() {
   const videoInfo = useVideoInfo();
   const videoElement = useAppStore((s) => s.videoElement);
   const contrast = useAppStore((s) => s.contrast);
+  const cameraResponse = useAppStore((s) => s.cameraResponse);
+  const cropRegion = useAppStore((s) => s.cropRegion);
   const ditherMode = useAppStore((s) => s.ditherMode);
   const palette = useAppStore((s) => s.palette);
   const invertPalette = useAppStore((s) => s.invertPalette);
@@ -133,6 +135,8 @@ function App() {
         fps: targetFps,
         settings: {
           contrast,
+          cameraResponse,
+          cropRegion,
           ditherMode,
           palette,
           invertPalette,
@@ -188,7 +192,7 @@ function App() {
       setIsExporting(false);
       setExportProgress(0);
     }
-  }, [videoInfo, videoElement, contrast, ditherMode, palette, invertPalette, enableLcdEffects, lcdGridIntensity, lcdShadowOpacity, lcdGhostingStrength, lcdBaselineAlpha, enableAudioBitcrush, audioHighpass, audioLowpass, audioBitDepth, audioDistortion, trimStart, trimEnd, targetFps, setIsExporting, setExportProgress]);
+  }, [videoInfo, videoElement, contrast, cameraResponse, cropRegion, ditherMode, palette, invertPalette, enableLcdEffects, lcdGridIntensity, lcdShadowOpacity, lcdGhostingStrength, lcdBaselineAlpha, enableAudioBitcrush, audioHighpass, audioLowpass, audioBitDepth, audioDistortion, trimStart, trimEnd, targetFps, setIsExporting, setExportProgress]);
 
   const handleCloseExportDialog = useCallback(() => {
     setShowExportDialog(false);
@@ -241,8 +245,8 @@ function App() {
 
       // D to cycle dither modes
       if (e.code === 'KeyD' && !e.metaKey && !e.ctrlKey) {
-        const modes: Array<'none' | 'bayer2x2' | 'bayer4x4' | 'floydSteinberg'> = [
-          'none', 'bayer2x2', 'bayer4x4', 'floydSteinberg'
+        const modes: Array<'none' | 'bayer2x2' | 'bayer4x4' | 'floydSteinberg' | 'gameBoyCamera'> = [
+          'none', 'bayer2x2', 'bayer4x4', 'floydSteinberg', 'gameBoyCamera'
         ];
         const currentMode = useAppStore.getState().ditherMode;
         const currentIndex = modes.indexOf(currentMode);

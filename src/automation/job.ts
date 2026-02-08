@@ -1,7 +1,8 @@
 import { SLIDERS } from '../constants/ui';
-import type { DitherMode } from '../state/store';
+import type { CropRegionNormalized, DitherMode } from '../state/store';
 import { PALETTE_NAMES, type PaletteName } from '../palettes';
 import type { ProcessingSettings } from '../processing/VideoProcessor';
+import { clampAndNormalizeCrop, getDefaultCenteredCrop } from '../utils';
 import jobSchema from './schema/job.v1.json';
 
 export type AutomationCommand = 'run' | 'inspect';
@@ -21,6 +22,8 @@ export interface ParsedAutomationJob {
   outputPath: string | null;
   settings: {
     contrast: number;
+    cameraResponse: number;
+    crop: CropRegionNormalized | null;
     ditherMode: DitherMode;
     palette: PaletteName;
     invertPalette: boolean;
@@ -95,6 +98,7 @@ export class JobValidationError extends Error {
 
 const DEFAULTS = {
   contrast: 1.0,
+  cameraResponse: 0.8,
   ditherMode: 'bayer4x4' as DitherMode,
   palette: '1989Green' as PaletteName,
   invertPalette: false,
@@ -137,7 +141,7 @@ function ensureString(value: unknown, label: string): string {
 }
 
 function validateDitherMode(value: unknown): DitherMode {
-  const allowed: DitherMode[] = ['none', 'bayer2x2', 'bayer4x4', 'floydSteinberg'];
+  const allowed: DitherMode[] = ['none', 'bayer2x2', 'bayer4x4', 'floydSteinberg', 'gameBoyCamera'];
   if (typeof value === 'string' && allowed.includes(value as DitherMode)) {
     return value as DitherMode;
   }
@@ -149,6 +153,28 @@ function validatePalette(value: unknown): PaletteName {
     return value as PaletteName;
   }
   return DEFAULTS.palette;
+}
+
+function validateCrop(value: unknown): CropRegionNormalized | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const x = asNumber(value.x);
+  const y = asNumber(value.y);
+  const width = asNumber(value.width);
+  const height = asNumber(value.height);
+
+  if (x === null || y === null || width === null || height === null) {
+    return null;
+  }
+
+  return {
+    x: clamp(x, 0, 1),
+    y: clamp(y, 0, 1),
+    width: clamp(width, 0, 1),
+    height: clamp(height, 0, 1),
+  };
 }
 
 function optionalRecord(value: unknown): JsonRecord {
@@ -251,6 +277,8 @@ export async function parseAndValidateJob(start: AutomationStartPayload): Promis
     outputPath,
     settings: {
       contrast,
+      cameraResponse: clamp(asNumber(settingsRecord.cameraResponse) ?? DEFAULTS.cameraResponse, 0, 1),
+      crop: validateCrop(settingsRecord.crop),
       ditherMode: validateDitherMode(settingsRecord.ditherMode),
       palette: validatePalette(settingsRecord.palette),
       invertPalette: Boolean(settingsRecord.invertPalette ?? DEFAULTS.invertPalette),
@@ -292,6 +320,10 @@ export function resolveJobForSource(
 
   const durationSafe = source.duration > 0 ? source.duration : 1;
 
+  const crop = parsedJob.settings.crop
+    ? clampAndNormalizeCrop(parsedJob.settings.crop, source.width, source.height)
+    : getDefaultCenteredCrop(source.width, source.height);
+
   return {
     command,
     schemaVersion: parsedJob.schemaVersion,
@@ -302,6 +334,8 @@ export function resolveJobForSource(
     settings: {
       processing: {
         contrast: parsedJob.settings.contrast,
+        cameraResponse: parsedJob.settings.cameraResponse,
+        cropRegion: crop as CropRegionNormalized,
         ditherMode: parsedJob.settings.ditherMode,
         palette: parsedJob.settings.palette,
         invertPalette: parsedJob.settings.invertPalette,
