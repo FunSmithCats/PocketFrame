@@ -4,3 +4,4 @@
 
 export * from './resolution';
 export * from './viewport';
+export * from './crop';

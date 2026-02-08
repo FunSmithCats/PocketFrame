@@ -27,6 +27,7 @@ export function ExportDialog({ isOpen, onClose, onExport, error }: ExportDialogP
   const setExportFormat = useAppStore((s) => s.setExportFormat);
   const enableAudioBitcrush = useAppStore((s) => s.enableAudioBitcrush);
   const setEnableAudioBitcrush = useAppStore((s) => s.setEnableAudioBitcrush);
+  const ditherMode = useAppStore((s) => s.ditherMode);
 
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -34,8 +35,8 @@ export function ExportDialog({ isOpen, onClose, onExport, error }: ExportDialogP
   // Calculate output dimensions based on source video and format
   const outputDimensions = useMemo(() => {
     if (!videoInfo) return { width: BASE_PIXEL_DENSITY * EXPORT_SCALE.HIGH_QUALITY, height: BASE_PIXEL_DENSITY * EXPORT_SCALE.HIGH_QUALITY };
-    return calculateOutputDimensions(videoInfo.width, videoInfo.height, exportFormat);
-  }, [videoInfo, exportFormat]);
+    return calculateOutputDimensions(videoInfo.width, videoInfo.height, exportFormat, ditherMode);
+  }, [videoInfo, exportFormat, ditherMode]);
 
   const handleExport = useCallback(() => {
     onExport(exportFormat);

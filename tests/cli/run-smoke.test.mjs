@@ -66,4 +66,6 @@ test('run exports mp4 and emits progress + completion events', async () => {
   assert.equal(completion.outputPath, outputPath);
   assert.ok(completion.bytesWritten > 0);
   assert.equal(completion.resolvedSettings.processing.ditherMode, 'floydSteinberg');
+  assert.equal(completion.resolvedSettings.processing.cameraResponse, 0.8);
+  assert.ok(completion.resolvedSettings.processing.cropRegion);
 });

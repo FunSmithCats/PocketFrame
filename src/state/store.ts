@@ -1,9 +1,11 @@
 import { create } from 'zustand';
 import type { PaletteName } from '../palettes';
+import { clampAndNormalizeCrop, getDefaultCenteredCrop } from '../utils';
 
-export type DitherMode = 'none' | 'bayer2x2' | 'bayer4x4' | 'floydSteinberg';
+export type DitherMode = 'none' | 'bayer2x2' | 'bayer4x4' | 'floydSteinberg' | 'gameBoyCamera';
 
 export type ExportFormat = 'mp4' | 'gif' | 'png';
+export type CropRegionNormalized = { x: number; y: number; width: number; height: number };
 
 interface VideoInfo {
   src: string;
@@ -23,6 +25,8 @@ interface AppState {
 
   // Processing settings
   contrast: number;
+  cameraResponse: number;
+  cropRegion: CropRegionNormalized;
   ditherMode: DitherMode;
   palette: PaletteName;
   invertPalette: boolean;
@@ -60,6 +64,9 @@ interface AppState {
   setIsPlaying: (playing: boolean) => void;
   setCurrentTime: (time: number) => void;
   setContrast: (contrast: number) => void;
+  setCameraResponse: (value: number) => void;
+  setCropRegion: (region: CropRegionNormalized) => void;
+  resetCropRegionForSource: (sourceW: number, sourceH: number) => void;
   setDitherMode: (mode: DitherMode) => void;
   setPalette: (palette: PaletteName) => void;
   setInvertPalette: (invert: boolean) => void;
@@ -91,6 +98,8 @@ const initialState = {
   isPlaying: false,
   currentTime: 0,
   contrast: 1.0,
+  cameraResponse: 0.8,
+  cropRegion: { x: 0, y: 0, width: 1, height: 1 } as CropRegionNormalized,
   ditherMode: 'bayer4x4' as DitherMode,
   palette: '1989Green' as PaletteName,
   invertPalette: false,
@@ -126,6 +135,29 @@ export const useAppStore = create<AppState>((set) => ({
   setIsPlaying: (playing) => set({ isPlaying: playing }),
   setCurrentTime: (time) => set({ currentTime: time }),
   setContrast: (contrast) => set({ contrast }),
+  setCameraResponse: (value) => set({ cameraResponse: Math.max(0, Math.min(value, 1)) }),
+  setCropRegion: (region) => set((state) => {
+    if (!state.videoInfo) {
+      return {
+        cropRegion: {
+          x: Math.max(0, Math.min(region.x, 1)),
+          y: Math.max(0, Math.min(region.y, 1)),
+          width: Math.max(0, Math.min(region.width, 1)),
+          height: Math.max(0, Math.min(region.height, 1)),
+        },
+      };
+    }
+    return {
+      cropRegion: clampAndNormalizeCrop(
+        region,
+        state.videoInfo.width,
+        state.videoInfo.height
+      ) as CropRegionNormalized,
+    };
+  }),
+  resetCropRegionForSource: (sourceW, sourceH) => set({
+    cropRegion: getDefaultCenteredCrop(sourceW, sourceH) as CropRegionNormalized,
+  }),
   setDitherMode: (mode) => set({ ditherMode: mode }),
   setPalette: (palette) => set({ palette }),
   setInvertPalette: (invert) => set({ invertPalette: invert }),
@@ -155,6 +187,8 @@ export const useAppStore = create<AppState>((set) => ({
 export const useVideoInfo = () => useAppStore((s) => s.videoInfo);
 export const useIsPlaying = () => useAppStore((s) => s.isPlaying);
 export const useContrast = () => useAppStore((s) => s.contrast);
+export const useCameraResponse = () => useAppStore((s) => s.cameraResponse);
+export const useCropRegion = () => useAppStore((s) => s.cropRegion);
 export const useDitherMode = () => useAppStore((s) => s.ditherMode);
 export const usePalette = () => useAppStore((s) => s.palette);
 export const useInvertPalette = () => useAppStore((s) => s.invertPalette);

@@ -3,7 +3,6 @@ import { toBlobURL, fetchFile } from '@ffmpeg/util';
 import type { FrameData } from '../VideoProcessor';
 import type { SourceVideoDimensions } from '../ExportManager';
 import { calculateScaledDimensions } from '../../utils';
-import { EXPORT_SCALE } from '../../constants';
 
 const VIDEO_CRF = '10';
 const VIDEO_PRESET = 'slow';
@@ -503,8 +502,8 @@ export async function encodeMp4(
   const frameWidth = frames[0].width;
   const frameHeight = frames[0].height;
 
-  // Calculate output dimensions based on frame dimensions (4x scale with even dimensions for H.264)
-  const outputDims = calculateScaledDimensions(frameWidth, frameHeight, EXPORT_SCALE.HIGH_QUALITY, true);
+  // Frames are already final-size from VideoProcessor; only normalize to even dimensions if needed.
+  const outputDims = calculateScaledDimensions(frameWidth, frameHeight, 1, true);
 
   console.log('Frame dimensions:', frameWidth, 'x', frameHeight, '-> Output:', outputDims);
 
@@ -536,18 +535,19 @@ export async function encodeMp4(
     '-i', 'input.raw',
   ];
 
-  // Scale to output dimensions with nearest neighbor for crisp pixels
-  // pad filter centers the content if aspect ratios don't match exactly
-  const scaleFilter = `scale=${outputDims.width}:${outputDims.height}:flags=neighbor:force_original_aspect_ratio=decrease,pad=${outputDims.width}:${outputDims.height}:(ow-iw)/2:(oh-ih)/2:black`;
-
   const outputArgs = [
-    '-vf', scaleFilter,
     '-c:v', 'libx264',
     '-pix_fmt', 'yuv420p',
     '-crf', VIDEO_CRF,
     '-preset', VIDEO_PRESET,
     '-tune', 'animation',
   ];
+
+  if (outputDims.width !== frameWidth || outputDims.height !== frameHeight) {
+    // Only apply resize/pad when enforcing even dimensions changes frame size.
+    const scaleFilter = `scale=${outputDims.width}:${outputDims.height}:flags=neighbor:force_original_aspect_ratio=decrease,pad=${outputDims.width}:${outputDims.height}:(ow-iw)/2:(oh-ih)/2:black`;
+    outputArgs.unshift('-vf', scaleFilter);
+  }
 
   // Handle audio if present
   console.log('Audio blob present:', !!audioBlob, 'Bitcrush enabled:', enableBitcrush);

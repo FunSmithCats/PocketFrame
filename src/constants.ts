@@ -5,6 +5,12 @@
 // Base pixel density - the shorter dimension will use this value for processing resolution
 export const BASE_PIXEL_DENSITY = 144;
 
+// Game Boy Camera sensor capture area
+export const GBCAM_SENSOR_WIDTH = 128;
+export const GBCAM_SENSOR_HEIGHT = 112;
+export const GBCAM_CROP_ASPECT = GBCAM_SENSOR_WIDTH / GBCAM_SENSOR_HEIGHT;
+export const GBCAM_MIN_CROP_WIDTH_NORM = 0.2;
+
 // Export scale factors
 export const EXPORT_SCALE = {
   /** Scale factor for MP4 and PNG exports (4x for high quality) */

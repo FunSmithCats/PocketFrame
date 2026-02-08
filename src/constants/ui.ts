@@ -27,6 +27,7 @@ export const TIMELINE = {
 // Sidebar slider configurations
 export const SLIDERS = {
   CONTRAST: { MIN: 0.5, MAX: 2.0, STEP: 0.05 },
+  CAMERA_RESPONSE: { MIN: 0, MAX: 1, STEP: 0.05 },
   FRAME_RATE: { MIN: 10, MAX: 60, STEP: 1 },
   LCD_GRID: { MIN: 0, MAX: 1, STEP: 0.05 },
   LCD_SHADOW: { MIN: 0, MAX: 1, STEP: 0.05 },

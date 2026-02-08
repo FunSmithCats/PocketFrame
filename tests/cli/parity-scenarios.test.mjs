@@ -92,3 +92,55 @@ test('floyd steinberg output differs from bayer4x4', async () => {
 
   assert.notEqual(bayerHash, floydHash);
 });
+
+test('game boy camera output differs from bayer4x4', async () => {
+  const tempDir = await fs.mkdtemp(path.join(PROJECT_ROOT, 'tests/tmp/parity-gbcam-mode-'));
+  const bayerHash = await runJob(tempDir, 'bayer.mp4', {
+    ditherMode: 'bayer4x4',
+    lcd: { enabled: false },
+  });
+
+  const gbcamHash = await runJob(tempDir, 'gbcam.mp4', {
+    ditherMode: 'gameBoyCamera',
+    cameraResponse: 0.8,
+    lcd: { enabled: false },
+  });
+
+  assert.notEqual(bayerHash, gbcamHash);
+});
+
+test('game boy camera response changes exported output', async () => {
+  const tempDir = await fs.mkdtemp(path.join(PROJECT_ROOT, 'tests/tmp/parity-gbcam-response-'));
+  const lowResponseHash = await runJob(tempDir, 'response-low.mp4', {
+    ditherMode: 'gameBoyCamera',
+    cameraResponse: 0,
+    lcd: { enabled: false },
+  });
+
+  const highResponseHash = await runJob(tempDir, 'response-high.mp4', {
+    ditherMode: 'gameBoyCamera',
+    cameraResponse: 1,
+    lcd: { enabled: false },
+  });
+
+  assert.notEqual(lowResponseHash, highResponseHash);
+});
+
+test('game boy camera crop region changes exported output', async () => {
+  const tempDir = await fs.mkdtemp(path.join(PROJECT_ROOT, 'tests/tmp/parity-gbcam-crop-'));
+  const centeredHash = await runJob(tempDir, 'crop-centered.mp4', {
+    ditherMode: 'gameBoyCamera',
+    cameraResponse: 0.8,
+    crop: { x: 0, y: 0.0138889, width: 1, height: 0.9722222 },
+    lcd: { enabled: false },
+  });
+
+  const tightHash = await runJob(tempDir, 'crop-tight.mp4', {
+    ditherMode: 'gameBoyCamera',
+    cameraResponse: 0.8,
+    crop: { x: 0.35, y: 0.25, width: 0.35, height: 0.35 / (8 / 7) },
+    lcd: { enabled: false },
+  });
+
+  assert.notEqual(centeredHash, tightHash);
+});
