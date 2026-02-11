@@ -2,6 +2,15 @@
   "name": "pocketframe",
   "version": "1.0.0",
   "description": "Minimalist video-to-retro-pixel-art converter",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JeffDraws/PocketFrame.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JeffDraws/PocketFrame/issues"
+  },
+  "homepage": "https://github.com/JeffDraws/PocketFrame#readme",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
