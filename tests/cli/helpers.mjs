@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,7 +11,10 @@ let buildPromise;
 
 export function buildAppOnce() {
   if (!buildPromise) {
-    buildPromise = runNpm(['run', 'build:app']);
+    buildPromise = (async () => {
+      await fs.mkdir(path.join(PROJECT_ROOT, 'tests/tmp'), { recursive: true });
+      return runNpm(['run', 'build:app']);
+    })();
   }
 
   return buildPromise.then((result) => {
