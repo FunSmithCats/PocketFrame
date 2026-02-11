@@ -69,7 +69,7 @@ function needsXvfb() {
  * Detect whether we need --no-sandbox (running as root).
  */
 function needsNoSandbox() {
-  return process.getuid?.() === 0;
+  return process.getuid?.() === 0 || process.env.CI === 'true';
 }
 
 const USE_XVFB = needsXvfb();
