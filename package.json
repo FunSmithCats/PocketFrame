@@ -22,7 +22,7 @@
     "build:app": "NODE_ENV=production vite build",
     "cli": "NODE_ENV=production vite build && NODE_ENV=production electron .",
     "cli:built": "NODE_ENV=production electron .",
-    "test:cli": "node --test tests/cli/*.test.mjs"
+    "test:cli": "node --test --test-concurrency=1 tests/cli/*.test.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",
