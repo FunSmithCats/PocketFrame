@@ -61,7 +61,7 @@ representative at an online or offline event.
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders by opening a private security advisory:
 
-https://github.com/JeffDraws/PocketFrame/security/advisories/new
+https://github.com/FunSmithCats/PocketFrame/security/advisories/new
 
 All complaints will be reviewed and investigated promptly and fairly.
 
