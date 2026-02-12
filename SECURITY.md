@@ -11,7 +11,7 @@ Please do not report security vulnerabilities in public issues.
 
 Use GitHub private vulnerability reporting:
 
-https://github.com/JeffDraws/PocketFrame/security/advisories/new
+https://github.com/FunSmithCats/PocketFrame/security/advisories/new
 
 If private reporting is unavailable, open a normal issue with minimal detail
 and request a private contact path from maintainers.
