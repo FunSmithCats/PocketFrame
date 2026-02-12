@@ -1,10 +1,52 @@
 # PocketFrame
 
-PocketFrame is an Electron + React app for converting videos into Game Boy-style output.
+PocketFrame is an Electron + React desktop app that converts video into Game Boy-inspired output.
+
+## Features
+
+- Interactive preview while tuning processing settings
+- MP4 export from the desktop app
+- Renderer-backed CLI automation (`run` and `inspect`) for batch workflows
+- Game Boy style processing controls including palette, dithering, LCD effects, and trim
+
+## Project Status
+
+PocketFrame is in active alpha development. Public builds may include breaking changes between releases.
+
+## Getting Started
+
+### Requirements
+
+- Node.js 20+
+- npm 10+
+
+### Install dependencies
+
+```bash
+npm ci
+```
+
+### Run in development mode
+
+```bash
+npm run electron:dev
+```
+
+### Build production artifacts
+
+```bash
+npm run build
+```
+
+### Run CLI tests
+
+```bash
+npm run test:cli
+```
 
 ## CLI Automation (v1)
 
-CLI automation is renderer-backed (same export internals as the UI) and currently supports MP4 jobs only.
+CLI automation is renderer-backed (same export internals as the UI) and currently supports MP4 jobs.
 
 ### Commands
 
@@ -20,7 +62,7 @@ Exit codes:
 - `3`: runtime/export failure
 - `124`: timeout
 
-### Job File Schema
+### Job file schema
 
 Schema file: `src/automation/schema/job.v1.json`
 
@@ -36,7 +78,7 @@ Minimal `run` job example:
   },
   "settings": {
     "contrast": 1.15,
-    "ditherMode": "floydSteinberg",
+    "ditherMode": "bayer4x4",
     "palette": "1989Green",
     "invertPalette": false,
     "targetFps": 24,
@@ -64,7 +106,7 @@ Minimal `run` job example:
 
 For `inspect`, `outputPath` is optional.
 
-### JSONL Events
+### JSONL events
 
 CLI emits JSON Lines to stdout.
 
@@ -86,9 +128,18 @@ Example output:
 {"type":"job_complete","timestamp":"2026-02-07T18:00:02.200Z","jobId":"...","outputPath":"/abs/out.mp4","bytesWritten":123456,"durationMs":1450}
 ```
 
-## Constraints (v1)
+## Alpha release docs
 
-- Desktop session required (not true headless CI)
-- MP4 output only in CLI
-- One job per invocation
-- Batch automation only (`run` and `inspect`)
+- Checklist: `docs/alpha/ALPHA_RELEASE_CHECKLIST.md`
+- Release notes template: `docs/alpha/ALPHA_RELEASE_NOTES_TEMPLATE.md`
+- Unsigned macOS install guide: `docs/alpha/UNSIGNED_MACOS_INSTALL.md`
+
+## Contributing and community
+
+- Contribution guide: `CONTRIBUTING.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
+- Security policy: `SECURITY.md`
+
+## License
+
+PocketFrame is licensed under the MIT License. See `LICENSE`.

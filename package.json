@@ -2,6 +2,15 @@
   "name": "pocketframe",
   "version": "1.0.0",
   "description": "Minimalist video-to-retro-pixel-art converter",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JeffDraws/PocketFrame.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JeffDraws/PocketFrame/issues"
+  },
+  "homepage": "https://github.com/JeffDraws/PocketFrame#readme",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -13,7 +22,8 @@
     "build:app": "NODE_ENV=production vite build",
     "cli": "NODE_ENV=production vite build && NODE_ENV=production electron .",
     "cli:built": "NODE_ENV=production electron .",
-    "test:cli": "node --test tests/cli/*.test.mjs"
+    "test:cli": "node --test --test-concurrency=1 tests/cli/*.test.mjs",
+    "test:cli:ci": "node --test --test-concurrency=1 tests/cli/inspect-smoke.test.mjs tests/cli/run-smoke.test.mjs tests/cli/validation-errors.test.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

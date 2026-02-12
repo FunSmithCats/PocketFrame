@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible problem in PocketFrame
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this bug. Please include clear steps so we can reproduce it.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What broke?
+      placeholder: Export fails when...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps help us reproduce quickly.
+      placeholder: |
+        1. Open app
+        2. Import video
+        3. Set ...
+        4. Click export
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: Export completes and output file plays correctly.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: App hangs at 90% and no file is written.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PocketFrame version
+      description: Tag, commit, or local branch if known.
+      placeholder: v0.1.0-alpha.1
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste relevant logs or drag screenshots/videos.
